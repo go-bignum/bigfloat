@@ -217,7 +217,9 @@ func regionsOf(fn string) []region {
 		return []region{
 			{"moderate", func(r *rand.Rand, p uint) []*big.Float { return []*big.Float{uni(r, p, 0, 10), uni(r, p, -50, 50)} }},
 			{"near1", func(r *rand.Rand, p uint) []*big.Float {
-				return []*big.Float{near(r, p, 1, -int(p), -4, 0), logu(r, p, 0, 40, 0)}
+				// x = 1 ± 2^e·m, |y·log x| below 2^20: no overflow
+				e := -4 - r.IntN(int(p)-3)
+				return []*big.Float{near(r, p, 1, e, e, 0), logu(r, p, 0, 20-e, 0)}
 			}},
 			{"wide", func(r *rand.Rand, p uint) []*big.Float {
 				return []*big.Float{logu(r, p, -1000, 1000, 1), uni(r, p, -3, 3)}
