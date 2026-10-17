@@ -142,6 +142,12 @@ func decide(b *ball, p uint, mode big.RoundingMode) *big.Float {
 	return proxyNear(lo, -d.Sign(), p)
 }
 
+// cmpAbs compares |a| and |b|.
+func cmpAbs(a, b *big.Float) int {
+	var x, y big.Float
+	return x.Abs(a).Cmp(y.Abs(b))
+}
+
 // precOf returns the precision of z, set from def when z has none (the
 // big.Float convention for operations: a zero-precision receiver takes its
 // operands' precision).
