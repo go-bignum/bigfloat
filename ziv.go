@@ -41,43 +41,60 @@ func nearBound(base *big.Float, p uint) int64 {
 // finish sets z to the rounding of v·2^K at z's precision and mode, with the
 // accuracy and the overflow/underflow semantics of big.Float itself: the
 // result is ±Inf when the rounded exponent exceeds MaxExp, ±0 when it falls
-// below MinExp. Scaling by a power of two commutes with rounding, so
-// rounding v first and scaling after is the same as rounding v·2^K.
+// below MinExp.
+//
+// v is scaled exactly first (at its own precision) and z.Set rounds it once:
+// that keeps z's precision and mode and sets z.Acc(). (SetMantExp would
+// copy the operand's precision, and resets the accuracy to Exact even when
+// it only moves an exponent.) A value whose rounded exponent is MaxExp+1
+// overflows inside z.Set, as in big.Float's own arithmetic.
 func finish(z, v *big.Float, K int64) *big.Float {
 	if v.Sign() == 0 || v.IsInf() {
 		return z.Set(v)
 	}
 	e := int64(v.MantExp(nil)) + K
 	switch {
-	case e > big.MaxExp+1:
+	case e > big.MaxExp:
 		return overflow(z, v.Signbit())
 	case e < big.MinExp-1:
 		return underflow(z, v.Signbit())
+	case e == big.MinExp-1:
+		// Just below the smallest normal binade: rounding may carry it
+		// up into range. Round one binade higher, then move down; the
+		// value and the underflow are big.Float's, the accuracy of such a
+		// result is reported as Exact.
+		t := scale2(v, K+1)
+		z.Set(t)
+		return z.SetMantExp(z, -1)
 	}
-	// |K| <= 2^31+2^31: split it so that each step fits an int on 32-bit
-	// targets; the first step rounds, the second only moves the exponent.
+	return z.Set(scale2(v, K))
+}
+
+// scale2 returns v·2^K exactly, at v's precision. |K| may reach 2^32: it
+// is applied in two steps so that each fits an int on 32-bit targets.
+func scale2(v *big.Float, K int64) *big.Float {
 	k1 := K / 2
-	z.SetMantExp(v, int(k1))
-	return z.SetMantExp(z, int(K-k1))
+	t := new(big.Float).SetMantExp(v, int(k1))
+	return t.SetMantExp(t, int(K-k1))
 }
 
 // overflow sets z to ±Inf the way big.Float's own arithmetic does on
 // exponent overflow (with z.Acc() reporting the direction).
 func overflow(z *big.Float, neg bool) *big.Float {
-	one := big.NewFloat(1)
+	z.SetInt64(1)
 	if neg {
-		one.Neg(one)
+		z.Neg(z)
 	}
-	return z.SetMantExp(one, big.MaxExp)
+	return z.SetMantExp(z, big.MaxExp)
 }
 
 // underflow sets z to ±0 the way big.Float does on exponent underflow.
 func underflow(z *big.Float, neg bool) *big.Float {
-	q := big.NewFloat(0.25)
+	z.SetFloat64(0.25)
 	if neg {
-		q.Neg(q)
+		z.Neg(z)
 	}
-	return z.SetMantExp(q, big.MinExp)
+	return z.SetMantExp(z, big.MinExp)
 }
 
 // evalFn evaluates a function at working precision wp and returns a ball

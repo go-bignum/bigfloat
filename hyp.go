@@ -333,7 +333,7 @@ func Atanh(z, x *big.Float) *big.Float {
 			atanhSeries(fxFromFloat(ax, w)).toBall(r)
 		} else {
 			// ½·log1p(2|x|/(1-|x|)), 1-|x| exact
-			d := new(big.Float).SetPrec(x.Prec() + 2).Sub(big.NewFloat(1), ax)
+			d := new(big.Float).SetPrec(x.Prec()+2).Sub(big.NewFloat(1), ax)
 			var n, db, a ball
 			n.setExact(ax)
 			n.mul2exp(&n, 1)

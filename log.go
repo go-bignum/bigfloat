@@ -81,7 +81,7 @@ func logBall(z *ball, x *big.Float, wp uint) bool {
 	}
 	w := wp + 12
 	var d big.Float
-	d.SetPrec(m.Prec() + 2).Sub(m, big.NewFloat(1))
+	d.SetPrec(m.Prec()+2).Sub(m, big.NewFloat(1))
 	if d.Sign() == 0 {
 		if e == 0 {
 			z.setInt64(0)

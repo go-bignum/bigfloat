@@ -76,8 +76,8 @@ func reduceHalfPi(x *big.Float, w uint) (*ball, int) {
 	// k = round(x / (π/2)) from a rough π: error far below 1/2.
 	pr := piBall(ex + 64)
 	var hp, kf big.Float
-	hp.SetPrec(ex + 64).SetMantExp(&pr.m, -1)
-	kf.SetPrec(ex + 64).Quo(x, &hp)
+	hp.SetPrec(ex+64).SetMantExp(&pr.m, -1)
+	kf.SetPrec(ex+64).Quo(x, &hp)
 	kint, _ := roundInt(&kf)
 	q := int(new(big.Int).And(kint, big.NewInt(3)).Int64())
 	wp := ex + w + 16
