@@ -176,6 +176,12 @@ func TestMpmathFailures(t *testing.T) {
 	if _, err := StartMpmath([]string{filepath.Join(t.TempDir(), "no-such-binary")}); err == nil {
 		t.Error("missing binary started")
 	}
+	// the default command, with a PATH where uv cannot be found: the same
+	// path is taken whether or not the machine has uv
+	t.Setenv("PATH", t.TempDir())
+	if _, err := StartMpmath(nil); err == nil {
+		t.Error("default command started without uv on PATH")
+	}
 	c := exec.Command("true")
 	c.Stdin = strings.NewReader("")
 	if _, err := start(c); err == nil {
