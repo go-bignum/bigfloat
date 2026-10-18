@@ -42,7 +42,13 @@ func TestMain(m *testing.M) {
 
 func fakeCmd(t *testing.T, mode string) string {
 	t.Setenv("FAKE_ORACLE", mode)
-	b, _ := json.Marshal([]string{os.Args[0], "-test.run=^$"})
+	return jsonArray(os.Args[0], "-test.run=^$")
+}
+
+// jsonArray encodes a command line for -cmd (paths with backslashes on
+// Windows must be escaped).
+func jsonArray(s ...string) string {
+	b, _ := json.Marshal(s)
 	return string(b)
 }
 
@@ -99,7 +105,7 @@ func TestRunErrors(t *testing.T) {
 		{[]string{"-nope"}, 2, "flag provided but not defined"},
 		{[]string{"-cmd", "{"}, 2, "JSON array"},
 		{[]string{"-cmd", "[]"}, 2, "JSON array"},
-		{[]string{"-cmd", `["` + filepath.Join(t.TempDir(), "missing") + `"]`}, 1, "starting mpmath"},
+		{[]string{"-cmd", jsonArray(filepath.Join(t.TempDir(), "missing"))}, 1, "starting mpmath"},
 		{[]string{"-self", "-fn", "nope"}, 2, "unknown function"},
 		{[]string{"-cmd", fakeCmd(t, "error"), "-fn", "exp", "-scale", "0.01"}, 1, "no"},
 		{[]string{"-self", "-fn", "pi", "-out", filepath.Join(file, "sub")}, 1, ""},

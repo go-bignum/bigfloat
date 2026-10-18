@@ -72,6 +72,24 @@ func TestBallFailures(t *testing.T) {
 	}
 }
 
+// TestAddSubGap: an operand far below the other becomes radius, on either
+// side and for both operations, and the ball still contains the sum.
+func TestAddSubGap(t *testing.T) {
+	var big1, tiny, z ball
+	big1.setInt64(3)
+	tiny.setExact(new(big.Float).SetMantExp(big.NewFloat(1), -1000))
+	for _, c := range []struct {
+		a, b *ball
+		neg  bool
+		want int64
+	}{{&big1, &tiny, false, 3}, {&big1, &tiny, true, 3}, {&tiny, &big1, false, 3}, {&tiny, &big1, true, -3}} {
+		z.addSub(c.a, c.b, c.neg, 64)
+		if v, _ := z.m.Int64(); v != c.want || z.r.isZero() || z.r.e > -990 {
+			t.Errorf("addSub(%v, %v, neg=%v) = %v ± %v", &c.a.m, &c.b.m, c.neg, &z.m, z.r)
+		}
+	}
+}
+
 // TestFixedFailures exercises the fixed-point refusals and bounds.
 func TestFixedFailures(t *testing.T) {
 	var zero, tiny, one, z fx

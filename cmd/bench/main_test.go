@@ -34,7 +34,13 @@ func TestMain(m *testing.M) {
 
 func fake(t *testing.T, mode string) string {
 	t.Setenv("FAKE_TIMER", mode)
-	b, _ := json.Marshal([]string{os.Args[0], "-test.run=^$"})
+	return jsonArray(os.Args[0], "-test.run=^$")
+}
+
+// jsonArray encodes a command line for -cmd (paths with backslashes on
+// Windows must be escaped).
+func jsonArray(s ...string) string {
+	b, _ := json.Marshal(s)
 	return string(b)
 }
 
@@ -63,7 +69,7 @@ func TestErrors(t *testing.T) {
 		{[]string{"-prec", "1"}, 2},
 		{[]string{"-prec", "x"}, 2},
 		{[]string{"-cmd", "{"}, 2},
-		{[]string{"-cmd", `["` + filepath.Join(t.TempDir(), "missing") + `"]`}, 1},
+		{[]string{"-cmd", jsonArray(filepath.Join(t.TempDir(), "missing"))}, 1},
 		{[]string{"-cmd", fake(t, "ok"), "-prec", "24", "-rounds", "1", "-target", "1ms", "-out", filepath.Join(t.TempDir(), "no", "dir")}, 1},
 	} {
 		var out, errb bytes.Buffer
