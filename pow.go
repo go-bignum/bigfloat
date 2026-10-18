@@ -93,10 +93,7 @@ func Pow(z, x, y *big.Float) *big.Float {
 	return ziv(z, x.Prec()+y.Prec(), func(wp uint) (*ball, int64, bool) {
 		eu := max(t.expUpper(), 0)
 		t, _ := powLog(ax, y, wp+uint(eu)+16)
-		b, K, ok := expBall(t, wp)
-		if !ok {
-			return nil, 0, false
-		}
+		b, K := expReduced(&t.m, t.r, wp)
 		if neg {
 			b.neg(b)
 		}

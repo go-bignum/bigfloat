@@ -11,24 +11,20 @@ import (
 // expPair returns e^|x| = b·2^k as a ball and c = 2^(-2k)/b, so that
 // e^-|x| = c·2^k: sinh and cosh are then (b ∓ c)·2^(k-1), free of
 // overflow before the final scaling.
-func expPair(x *big.Float, wp uint) (b, c *ball, k int64, ok bool) {
+func expPair(x *big.Float, wp uint) (b, c *ball, k int64) {
 	ax := new(big.Float).Abs(x)
-	b, k, ok = expReduced(ax, mag{}, wp)
-	if !ok {
-		return nil, nil, 0, false
-	}
-	var t ball
+	b, k = expReduced(ax, mag{}, wp)
+	c = new(ball)
 	if -2*k < big.MinExp+64 {
-		// 2^(-2k)/b underflows: it is below 2^-(k+...) relative, a radius.
-		c = new(ball)
+		// 2^(-2k)/b would underflow: below 2^(-2k+1), it becomes a radius.
 		c.setInt64(0)
 		c.r = magPow2(-2*k + 1)
-		return b, c, k, true
+		return b, c, k
 	}
+	var t ball
 	t.m.SetMantExp(big.NewFloat(1), int(-2*k))
-	c = new(ball)
-	c.quo(&t, b, wp)
-	return b, c, k, true
+	must(c.quo(&t, b, wp))
+	return b, c, k
 }
 
 // Sinh sets z to the correctly rounded hyperbolic sine of x and returns z.
@@ -40,11 +36,11 @@ func Sinh(z, x *big.Float) *big.Float {
 	}
 	p := z.Prec()
 	ex := int64(x.MantExp(nil))
-	// sinh x - x in (0, |x|³/5) for 0 < x <= 1/2
-	if 3*ex <= nearBound(x, p) {
+	switch {
+	case 3*ex <= nearBound(x, p):
+		// sinh x - x in (0, |x|³/5) for 0 < x <= 1/2
 		return finish(z, proxyNear(x, x.Sign(), p), 0)
-	}
-	if ex > 34 {
+	case ex > 34:
 		return overflow(z, x.Signbit())
 	}
 	x = new(big.Float).Set(x)
@@ -53,26 +49,21 @@ func Sinh(z, x *big.Float) *big.Float {
 		var r ball
 		var K int64
 		if ex < 0 {
-			// |x| < 1/2: E = expm1|x|, sinh = E(E+2)/(2(E+1)).
+			// |x| < 1/2: E = expm1|x|, sinh = E(E+2)/(2(E+1)), E+1 >= 1.
 			w := wp + uint(-ex) + 24
 			ax := new(big.Float).Abs(x)
-			E := expm1Core(fxFromFloat(ax, w), uint(max(0, int64(expSplit(wp))+ex+1)))
+			E := expm1Core(fxFromFloat(ax, w), expm1Split(wp, ex))
 			var e1, e2, one, two fx
 			one.setInt(1, w)
 			two.setInt(2, w)
 			e1.add(E, &one)
 			e2.add(E, &two)
 			e2.mul(E, &e2)
-			if !e2.quo(&e2, &e1) {
-				return nil, 0, false
-			}
+			must(e2.quo(&e2, &e1))
 			e2.toBall(&r)
 			K = -1
 		} else {
-			b, c, k, ok := expPair(x, wp+8)
-			if !ok {
-				return nil, 0, false
-			}
+			b, c, k := expPair(x, wp+8)
 			r.sub(b, c, wp+8)
 			K = k - 1
 		}
@@ -96,19 +87,16 @@ func Cosh(z, x *big.Float) *big.Float {
 	p := z.Prec()
 	ex := int64(x.MantExp(nil))
 	one := big.NewFloat(1)
-	// cosh x - 1 in (0, x²) for |x| <= 1
-	if 2*ex <= nearBound(one, p) {
+	switch {
+	case 2*ex <= nearBound(one, p):
+		// cosh x - 1 in (0, x²) for |x| <= 1
 		return finish(z, proxyNear(one, 1, p), 0)
-	}
-	if ex > 34 {
+	case ex > 34:
 		return overflow(z, false)
 	}
 	x = new(big.Float).Set(x)
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
-		b, c, k, ok := expPair(x, wp+8)
-		if !ok {
-			return nil, 0, false
-		}
+		b, c, k := expPair(x, wp+8)
 		var r ball
 		r.add(b, c, wp+8)
 		return &r, k - 1, true
@@ -120,24 +108,24 @@ func Cosh(z, x *big.Float) *big.Float {
 func Tanh(z, x *big.Float) *big.Float {
 	precOf(z, x.Prec())
 	switch {
+	case x.IsInf() && x.Signbit():
+		return z.SetInt64(-1)
 	case x.IsInf():
-		if x.Signbit() {
-			return z.SetInt64(-1)
-		}
 		return z.SetInt64(1)
 	case x.Sign() == 0:
 		return z.Set(x)
 	}
 	p := z.Prec()
 	ex := int64(x.MantExp(nil))
-	// x - tanh x in (0, x³/3) for x > 0
-	if 3*ex <= nearBound(x, p) {
-		return finish(z, proxyNear(x, -x.Sign(), p), 0)
-	}
 	one := big.NewFloat(float64(x.Sign()))
 	// 1 - tanh|x| = 2/(e^(2|x|)+1) < 2^(1 - 2|x|·log2 e) <= 2^nearBound(±1)
 	// when |x| >= (1 - nearBound)·0.35.
-	if lim := big.NewFloat(float64(1-nearBound(one, p)) * 0.35); cmpAbs(x, lim) >= 0 {
+	lim := big.NewFloat(float64(1-nearBound(one, p)) * 0.35)
+	switch {
+	case 3*ex <= nearBound(x, p):
+		// x - tanh x in (0, x³/3) for x > 0
+		return finish(z, proxyNear(x, -x.Sign(), p), 0)
+	case cmpAbs(x, lim) >= 0:
 		return finish(z, proxyNear(one, -x.Sign(), p), 0)
 	}
 	x = new(big.Float).Set(x)
@@ -147,27 +135,22 @@ func Tanh(z, x *big.Float) *big.Float {
 		ax := new(big.Float).Abs(x)
 		ax.SetMantExp(ax, 1) // 2|x|, exact
 		if ex < -1 {
-			// 2|x| < 1/2: E = expm1(2|x|), tanh = E/(E+2).
+			// 2|x| < 1/2: E = expm1(2|x|), tanh = E/(E+2), E+2 > 2.
 			w := wp + uint(-ex) + 24
-			E := expm1Core(fxFromFloat(ax, w), uint(max(0, int64(expSplit(wp))+ex+2)))
+			E := expm1Core(fxFromFloat(ax, w), expm1Split(wp, ex+1))
 			var d, two fx
 			two.setInt(2, w)
 			d.add(E, &two)
-			if !E.quo(E, &d) {
-				return nil, 0, false
-			}
+			must(E.quo(E, &d))
 			E.toBall(&r)
 		} else {
 			// e^(2|x|) = b·2^k, tanh = (b - 2^-k)/(b + 2^-k)
-			b, k, ok := expReduced(ax, mag{}, wp+8)
-			if !ok {
-				return nil, 0, false
-			}
+			b, k := expReduced(ax, mag{}, wp+8)
 			var c, n, d ball
 			c.m.SetMantExp(big.NewFloat(1), int(-k))
 			n.sub(b, &c, wp+8)
 			d.add(b, &c, wp+8)
-			r.quo(&n, &d, wp+8)
+			must(r.quo(&n, &d, wp+8))
 		}
 		if neg {
 			r.neg(&r)
@@ -176,33 +159,27 @@ func Tanh(z, x *big.Float) *big.Float {
 	})
 }
 
-// log1pBall encloses log(1+a) for a ball a > -1, with relative accuracy
-// near a = 0: 2·atanh(a/(2+a)) when |a| < 1/2.
-func log1pBall(a *ball, wp uint) (*ball, bool) {
+// log1pBall encloses log(1+a) for a ball a > 0 (every point), with
+// relative accuracy near a = 0: 2·atanh(a/(2+a)) when |a| < 1/2.
+func log1pBall(a *ball, wp uint) *ball {
 	z := new(ball)
 	if a.expUpper() < 0 {
 		el, ok := a.expLower()
-		if !ok {
-			return nil, false
-		}
+		must(ok)
 		var two, d, t ball
 		two.setInt64(2)
 		d.add(&two, a, wp+16)
-		if !t.quo(a, &d, wp+16) {
-			return nil, false
-		}
-		w := wp + 16
-		if el < 0 {
-			w += uint(-el)
-		}
+		must(t.quo(a, &d, wp+16))
+		w := wp + 16 + uint(max(0, -el))
 		y := atanhSeries(fxFromBall(&t, w))
 		y.shl(y, 1).toBall(z)
-		return z, true
+		return z
 	}
 	var one, u ball
 	one.setInt64(1)
 	u.add(a, &one, wp+16)
-	return z, logBallB(z, &u, wp)
+	must(logBallB(z, &u, wp))
+	return z
 }
 
 // Asinh sets z to the correctly rounded inverse hyperbolic sine of x and
@@ -222,12 +199,11 @@ func Asinh(z, x *big.Float) *big.Float {
 	neg := x.Sign() < 0
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
 		ax := new(big.Float).Abs(x)
-		var r *ball
+		r := new(ball)
 		switch {
 		case ex > int64(wp/2)+8:
 			// asinh x - log 2x in (0, 1/(4x²))
 			t := new(big.Float).SetMantExp(ax, 1)
-			r = new(ball)
 			logBall(r, t, wp+8)
 			r.addRad(magPow2(-2*ex + 2))
 		case ex < 0:
@@ -237,14 +213,11 @@ func Asinh(z, x *big.Float) *big.Float {
 			one.setInt64(1)
 			x2.mul(&xb, &xb, wp+24)
 			s.add(&x2, &one, wp+24)
-			s.sqrt(&s, wp+24)
+			must(s.sqrt(&s, wp+24))
 			s.add(&s, &one, wp+24)
-			x2.quo(&x2, &s, wp+24)
+			must(x2.quo(&x2, &s, wp+24))
 			a.add(&xb, &x2, wp+24)
-			var ok bool
-			if r, ok = log1pBall(&a, wp+8); !ok {
-				return nil, 0, false
-			}
+			r = log1pBall(&a, wp+8)
 		default:
 			// log(|x| + sqrt(x²+1))
 			var xb, s, one ball
@@ -252,12 +225,9 @@ func Asinh(z, x *big.Float) *big.Float {
 			one.setInt64(1)
 			s.mul(&xb, &xb, wp+16)
 			s.add(&s, &one, wp+16)
-			s.sqrt(&s, wp+16)
+			must(s.sqrt(&s, wp+16))
 			s.add(&s, &xb, wp+16)
-			r = new(ball)
-			if !logBallB(r, &s, wp+8) {
-				return nil, 0, false
-			}
+			must(logBallB(r, &s, wp+8))
 		}
 		if neg {
 			r.neg(r)
@@ -298,10 +268,9 @@ func Acosh(z, x *big.Float) *big.Float {
 		var db, s, a ball
 		db.setExact(d)
 		s.setExact(e)
-		s.sqrt(&s, wp+24)
+		must(s.sqrt(&s, wp+24))
 		a.add(&db, &s, wp+24)
-		r, ok := log1pBall(&a, wp+8)
-		return r, 0, ok
+		return log1pBall(&a, wp+8), 0, true
 	})
 }
 
@@ -338,11 +307,8 @@ func Atanh(z, x *big.Float) *big.Float {
 			n.setExact(ax)
 			n.mul2exp(&n, 1)
 			db.setExact(d)
-			a.quo(&n, &db, wp+16)
-			var ok bool
-			if r, ok = log1pBall(&a, wp+8); !ok {
-				return nil, 0, false
-			}
+			must(a.quo(&n, &db, wp+16))
+			r = log1pBall(&a, wp+8)
 			r.mul2exp(r, -1)
 		}
 		if neg {

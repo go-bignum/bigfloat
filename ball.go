@@ -81,12 +81,6 @@ func (z *ball) neg(a *ball) *ball {
 	return z
 }
 
-func (z *ball) abs(a *ball) *ball {
-	z.set(a)
-	z.m.Abs(&z.m)
-	return z
-}
-
 // mul: |AB - ab| <= |a|·rb + |b|·ra + ra·rb.
 func (z *ball) mul(a, b *ball, wp uint) *ball {
 	r := magAdd(magAdd(magMul(magFloat(&a.m), b.r), magMul(magFloat(&b.m), a.r)), magMul(a.r, b.r))
@@ -97,12 +91,8 @@ func (z *ball) mul(a, b *ball, wp uint) *ball {
 // big.Float's exponent range).
 func (z *ball) mul2exp(a *ball, k int) *ball {
 	z.set(a)
-	if z.m.Sign() != 0 {
-		z.m.SetMantExp(&z.m, k)
-	}
-	if !z.r.isZero() {
-		z.r.e += int64(k)
-	}
+	z.m.SetMantExp(&z.m, k) // no-op on zero
+	z.r.e += int64(k)       // a zero radius stays zero (m = 0)
 	return z
 }
 
@@ -126,19 +116,13 @@ func (z *ball) quo(a, b *ball, wp uint) bool {
 }
 
 // sqrt: |sqrt(X) - sqrt(x)| <= r/(sqrt(x-r)+sqrt(x)) <= r/sqrt(x-r). It
-// reports false unless the ball lies in x > 0 (or is the exact point 0).
+// reports false unless every point of the ball is positive.
 func (z *ball) sqrt(a *ball, wp uint) bool {
-	if a.m.Sign() < 0 {
+	lb := a.lower()
+	if lb.isZero() || a.m.Sign() < 0 {
 		return false
 	}
-	var r mag
-	if !a.r.isZero() {
-		lb := a.lower()
-		if lb.isZero() || a.m.Sign() == 0 {
-			return false
-		}
-		r = magDiv(a.r, magSqrtLower(lb))
-	}
+	r := magDiv(a.r, magSqrtLower(lb))
 	z.setMid(sqrtRound(prep(wp), &a.m), r, wp)
 	return true
 }
@@ -152,15 +136,9 @@ func (a *ball) sign() int {
 	return a.m.Sign()
 }
 
-// exponent returns e with |x| < 2^e for every point (the ball must not be
-// zero-free for the bound to be tight; it is always an upper bound).
-func (a *ball) expUpper() int64 {
-	u := a.upper()
-	if u.isZero() {
-		return -1 << 40
-	}
-	return u.e
-}
+// expUpper returns e with |x| < 2^e for every point (of a ball that is
+// not the exact point 0).
+func (a *ball) expUpper() int64 { return a.upper().e }
 
 // expLower returns e with |x| >= 2^(e-1) for every point, or ok=false when
 // the ball contains zero.

@@ -116,15 +116,6 @@ func (z *fx) divSmall(a *fx, k uint64) *fx {
 	return z
 }
 
-// mulSmall multiplies by the integer k exactly.
-func (z *fx) mulSmall(a *fx, k int64) *fx {
-	e := mulUp(a.e, math.Abs(float64(k)))
-	z.w = a.w
-	z.v.Mul(&a.v, big.NewInt(k))
-	z.e = e
-	return z
-}
-
 // shr divides by 2^s (floor: one ulp).
 func (z *fx) shr(a *fx, s uint) *fx {
 	e := addUp(math.Ldexp(a.e, -int(s)), 1)

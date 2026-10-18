@@ -20,7 +20,10 @@
 // oracle for far more bits than the target precision, widens the answer by
 // the oracle's declared slack, and raises the precision (Ziv's strategy)
 // until both ends of that interval round to the same value in every mode.
-// Exact results — whose interval always straddles a representable value —
+// A decision is then confirmed by a second evaluation at twice the
+// precision, which must decide the same way: an oracle that is less
+// accurate than it claims at one precision (a cancellation it did not
+// compensate) is caught rather than trusted. Exact results — whose interval always straddles a representable value —
 // are recognised beforehand by [Exact], with integer arithmetic written
 // independently of the package under test.
 package oracle
@@ -76,7 +79,7 @@ type Result struct {
 type Rounder struct {
 	Oracle Oracle
 	// MaxPrec bounds the working precision asked of the oracle; 0 means
-	// 64 times the target precision plus 32768.
+	// 64 times the target precision plus 65536.
 	MaxPrec uint
 }
 
@@ -96,19 +99,35 @@ func (r *Rounder) Round(fn string, prec uint, args ...*big.Float) ([]Result, err
 	}
 	limit := r.MaxPrec
 	if limit == 0 {
-		limit = 64*prec + 1<<15
+		limit = 64*prec + 1<<16
 	}
 	slack := r.Oracle.Slack()
+	var prev []Result
 	for q := 2*prec + 64; q <= limit; q *= 2 {
 		v, err := r.Oracle.Eval(fn, q, args...)
 		if err != nil {
 			return nil, err
 		}
-		if res, ok := decideAll(v, q-slack, prec); ok {
+		res, ok := decideAll(v, q-slack, prec)
+		switch {
+		case ok && prev != nil && sameResults(res, prev):
 			return res, nil
+		case ok:
+			prev = res
+		default:
+			prev = nil
 		}
 	}
 	return nil, ErrUndecided
+}
+
+func sameResults(a, b []Result) bool {
+	for i := range a {
+		if a[i].Value.Cmp(b[i].Value) != 0 || a[i].Acc != b[i].Acc {
+			return false
+		}
+	}
+	return true
 }
 
 // roundAll rounds an exact value in every mode.

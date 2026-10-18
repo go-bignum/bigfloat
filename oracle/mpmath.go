@@ -19,20 +19,23 @@ const MpmathVersion = "1.4.1"
 
 // MpmathScript is the whole of the Python side: it reads one JSON request
 // per line — {"f": name, "p": bits, "a": [[mantissa, exponent], ...]} —
-// sets mpmath's working precision, evaluates, and writes
-// {"s": sign, "m": mantissa, "e": exponent} (or {"i": ±1} for an infinity,
-// {"x": message} for an error). Mantissas are decimal integer strings, so
-// values cross the pipe exactly. Odd roots of negative numbers are taken
-// as real (mpmath returns the principal complex root).
+// sets mpmath's working precision to the larger of "p" and the arguments'
+// own lengths (an mpf is rounded to the working precision when it is
+// built, so a shorter one would round the arguments), evaluates, and
+// writes {"s": sign, "m": mantissa, "e": exponent} (or {"i": ±1} for an
+// infinity, {"x": message} for an error). Mantissas are decimal integer
+// strings, so values cross the pipe exactly. Odd roots of negative numbers
+// are taken as real (mpmath returns the principal complex root).
 const MpmathScript = `import sys,json,mpmath as M
 from mpmath import mp,mpf
 sys.set_int_max_str_digits(0)
 r1=lambda f:(lambda x,*a:-f(-x,*a) if x<0 else f(x,*a))
 F=dict(sqrt=M.sqrt,cbrt=r1(M.cbrt),root=r1(lambda x,n:M.root(x,int(n))),hypot=M.hypot,exp=M.exp,expm1=M.expm1,log=M.log,log1p=M.log1p,log2=lambda x:M.log(x,2),log10=M.log10,pow=M.power,sin=M.sin,cos=M.cos,tan=M.tan,asin=M.asin,acos=M.acos,atan=M.atan,atan2=M.atan2,sinh=M.sinh,cosh=M.cosh,tanh=M.tanh,asinh=M.asinh,acosh=M.acosh,atanh=M.atanh,pi=lambda:+mp.pi,e=lambda:+mp.e,ln2=lambda:+mp.ln2,ln10=lambda:+mp.ln10,euler=lambda:+mp.euler)
 for l in sys.stdin:
-  q=json.loads(l);mp.prec=q["p"]
+  q=json.loads(l);a=[(int(m),e) for m,e in q["a"]]
+  mp.prec=max([q["p"]]+[abs(m).bit_length()+1 for m,e in a])
   try:
-    v=F[q["f"]](*[mpf((int(m),e)) for m,e in q["a"]])
+    v=F[q["f"]](*[mpf(t) for t in a])
     if M.isinf(v):o={"i":1 if v>0 else -1}
     else:s,m,e,b=v._mpf_;o={"s":s,"m":str(m),"e":e}
   except Exception as x:o={"x":repr(x)}

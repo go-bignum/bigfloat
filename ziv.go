@@ -19,16 +19,21 @@ import (
 // and every rounding breakpoint of precision p near it (representable
 // numbers and midpoints) lie on a common grid of spacing 2^(exp(base)-P+2)
 // or half of it below a power of two, so neither y nor v crosses one.
-// With dir = 0 it is base itself, for exact results.
+// base is finite and non-zero, dir is ±1.
 func proxyNear(base *big.Float, dir int, p uint) *big.Float {
-	v := new(big.Float)
-	if dir == 0 || base.Sign() == 0 || base.IsInf() {
-		return v.SetPrec(base.Prec()).Set(base)
-	}
 	P := max(p+2, base.Prec()) + 2
 	e := base.MantExp(nil)
 	d := new(big.Float).SetMantExp(big.NewFloat(float64(dir)), e-int(P)-1)
-	return v.SetPrec(P+2).Add(base, d)
+	return new(big.Float).SetPrec(P+2).Add(base, d)
+}
+
+// must panics on an internal invariant that does not hold: a ball operation
+// that cannot fail for the arguments its caller builds (a divisor or a
+// logarithm's argument bounded away from zero by construction).
+func must(ok bool) {
+	if !ok {
+		panic("bigfloat: internal error: enclosure invariant violated")
+	}
 }
 
 // nearBound returns the exponent b such that proxyNear(base, ±1, p) may be
@@ -47,11 +52,9 @@ func nearBound(base *big.Float, p uint) int64 {
 // that keeps z's precision and mode and sets z.Acc(). (SetMantExp would
 // copy the operand's precision, and resets the accuracy to Exact even when
 // it only moves an exponent.) A value whose rounded exponent is MaxExp+1
-// overflows inside z.Set, as in big.Float's own arithmetic.
+// overflows inside z.Set, as in big.Float's own arithmetic. v is finite and
+// non-zero (zero and infinite results are special values, set directly).
 func finish(z, v *big.Float, K int64) *big.Float {
-	if v.Sign() == 0 || v.IsInf() {
-		return z.Set(v)
-	}
 	e := int64(v.MantExp(nil)) + K
 	switch {
 	case e > big.MaxExp:
@@ -143,14 +146,12 @@ func decide(b *ball, p uint, mode big.RoundingMode) *big.Float {
 	if lo.Cmp(hi) != 0 || lo.Signbit() != hi.Signbit() || lo.Sign() == 0 || lo.IsInf() {
 		return nil
 	}
-	// d = lo - m, exactly: lo and m are within a few ulps of each other.
+	// d = lo - m, exactly: the bits of lo and m together span at most
+	// max(p, prec(m)) + |exp(lo) - exp(m)| positions, plus a carry.
 	em, el := b.m.MantExp(nil), lo.MantExp(nil)
 	ed := uint(max(em-el, el-em))
 	d := new(big.Float).SetPrec(max(p, b.m.Prec()) + ed + 4)
 	d.Sub(lo, &b.m)
-	if d.Acc() != big.Exact {
-		return nil
-	}
 	var ad big.Float
 	ad.Abs(d)
 	if ad.Cmp(&rad) <= 0 {

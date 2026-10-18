@@ -13,17 +13,9 @@ import (
 // |t|^(2n+3)/(1-t²) <= 2|t|^(2n+3).
 func atanhSeries(t *fx) *fx {
 	w := t.w
-	lt := int64(t.log2bnd())
-	if lt > -1 {
-		lt = -1
-	}
-	if lt < -int64(w) {
-		var z fx
-		z.set(t)
-		// |atanh t - t| <= |t|³ < one ulp
-		z.e = addUp(z.e, 1)
-		return &z
-	}
+	// every caller has |t| <= 1/3; log2bnd counts the error bound, so
+	// lt >= 1 - w and n stays positive
+	lt := min(int64(t.log2bnd()), -1)
 	// 1 + lt(2n+3) <= -w
 	n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
 	var u, y, c fx
@@ -63,34 +55,31 @@ func logReduced(m *big.Float, w uint) *fx {
 var sqrtHalf = big.NewFloat(0.70710678118654752440)
 
 // logBall sets z to an enclosure of log x, x > 0 exact finite, with about
-// wp bits of relative accuracy (the reduction keeps it near x = 1).
-func logBall(z *ball, x *big.Float, wp uint) bool {
+// wp bits of relative accuracy (the reduction keeps it near x = 1). x = 1
+// gives the exact 0 (t = 0 in the series).
+func logBall(z *ball, x *big.Float, wp uint) {
 	m := new(big.Float)
 	e := x.MantExp(m)
 	if m.Cmp(sqrtHalf) < 0 {
 		m.SetMantExp(m, 1)
 		e--
 	}
+	w := wp + 12
+	if e == 0 {
+		// near 1: log m ~ m-1 needs as many more bits as m-1 has leading
+		// zeros (m-1 is exact at prec(m)+2 bits)
+		var d big.Float
+		d.SetPrec(m.Prec()+2).Sub(m, big.NewFloat(1))
+		w += uint(max(0, -d.MantExp(nil)))
+	}
 	var rad mag
-	// a huge-precision m is rounded first: |log m' - log m| <= 2|m'-m|.
-	if m.Prec() > wp+96 {
+	// a long m is rounded first, to w+64 bits; since m >= 1/sqrt2,
+	// |log m' - log m| <= 2|m'-m|. (m - 1 keeps its leading bits.)
+	if m.Prec() > w+96 {
 		var mb ball
-		mb.setFloat(m, wp+64)
+		mb.setFloat(m, w+64)
 		rad = magMul(mb.r, magPow2(1))
 		m = &mb.m
-	}
-	w := wp + 12
-	var d big.Float
-	d.SetPrec(m.Prec()+2).Sub(m, big.NewFloat(1))
-	if d.Sign() == 0 {
-		if e == 0 {
-			z.setInt64(0)
-			return z.addRad(rad) != nil
-		}
-	} else if e == 0 {
-		if ed := d.MantExp(nil); ed < 0 {
-			w += uint(-ed)
-		}
 	}
 	lm := logReduced(m, w)
 	var lb ball
@@ -107,7 +96,6 @@ func logBall(z *ball, x *big.Float, wp uint) bool {
 		z.set(&lb)
 	}
 	z.addRad(rad)
-	return true
 }
 
 // logBallB encloses log of a ball: |log X - log x| <= r/(x - r).

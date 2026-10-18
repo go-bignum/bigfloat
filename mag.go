@@ -97,30 +97,14 @@ func magSubLower(a, b mag) mag {
 	return magNorm(down(s), a.e)
 }
 
-// magSqrtLower bounds sqrt(a) from below.
+// magSqrtLower bounds sqrt(a) from below (a non-zero).
 func magSqrtLower(a mag) mag {
-	if a.m == 0 {
-		return mag{}
-	}
 	m, e := a.m, a.e
 	if e%2 != 0 {
 		m *= 2
 		e--
 	}
 	return magNorm(down(math.Sqrt(m)), e/2)
-}
-
-// magSqrtUpper bounds sqrt(a) from above.
-func magSqrtUpper(a mag) mag {
-	if a.m == 0 {
-		return mag{}
-	}
-	m, e := a.m, a.e
-	if e%2 != 0 {
-		m *= 2
-		e--
-	}
-	return magNorm(up(math.Sqrt(m)), e/2)
 }
 
 // magFloat bounds |x| from above (finite x).
@@ -177,6 +161,3 @@ func (a mag) float(z *big.Float) *big.Float {
 	}
 	return z.SetMantExp(z, int(e))
 }
-
-// log2Upper returns an integer b with a <= 2^b (a non-zero).
-func (a mag) log2Upper() int64 { return a.e }

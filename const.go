@@ -220,12 +220,7 @@ func eulerBallCompute(wp uint) *ball {
 
 // logInt encloses log n for an integer n >= 1.
 func logInt(z *ball, n int64, wp uint) {
-	if n == 1 {
-		z.setInt64(0)
-		return
-	}
-	x := new(big.Float).SetInt64(n)
-	logBall(z, x, wp)
+	logBall(z, new(big.Float).SetInt64(n), wp)
 }
 
 // constCache memoises a constant at the highest precision asked so far;

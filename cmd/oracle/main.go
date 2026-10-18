@@ -157,6 +157,12 @@ func generate(rd *oracle.Rounder, fn string, seed uint64, scale float64) (*oracl
 					return nil, err
 				}
 			}
+			// arguments longer than the result: 4p+64 bits for p
+			for i := 0; i < max(per/4, 1); i++ {
+				if err := add(rg.name+"/long", pc.Prec, rg.gen(r, 4*pc.Prec+64)); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return f, nil

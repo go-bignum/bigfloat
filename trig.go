@@ -21,10 +21,7 @@ func sincosCore(r *fx, j uint) (*fx, *fx) {
 	w := r.w
 	var t fx
 	t.shr(r, j)
-	lt := int64(t.log2bnd())
-	if lt > -1 {
-		lt = -1
-	}
+	lt := min(int64(t.log2bnd()), -1)
 	// cos tail <= |t|^(2n+2)/(2n+2)!, sin tail smaller.
 	n := int64(1)
 	for lt*(2*n+2)-log2FactLower(2*n+2) > -int64(w)-1 {
@@ -78,7 +75,7 @@ func reduceHalfPi(x *big.Float, w uint) (*ball, int) {
 	var hp, kf big.Float
 	hp.SetPrec(ex+64).SetMantExp(&pr.m, -1)
 	kf.SetPrec(ex+64).Quo(x, &hp)
-	kint, _ := roundInt(&kf)
+	kint := roundInt(&kf)
 	q := int(new(big.Int).And(kint, big.NewInt(3)).Int64())
 	wp := ex + w + 16
 	pb := piBall(wp)
@@ -91,9 +88,9 @@ func reduceHalfPi(x *big.Float, w uint) (*ball, int) {
 	return r, q
 }
 
-// roundInt rounds x to the nearest integer (ties away; any rounding will do
-// for a reduction quotient).
-func roundInt(x *big.Float) (*big.Int, big.Accuracy) {
+// roundInt rounds x to an integer near it (ties away; any rounding will
+// do for a reduction quotient).
+func roundInt(x *big.Float) *big.Int {
 	var h big.Float
 	h.SetPrec(x.Prec() + 2)
 	if x.Sign() >= 0 {
@@ -101,25 +98,32 @@ func roundInt(x *big.Float) (*big.Int, big.Accuracy) {
 	} else {
 		h.Sub(x, big.NewFloat(0.5))
 	}
-	return h.Int(nil)
+	n, _ := h.Int(nil)
+	return n
 }
 
 // sincosBall returns balls for sin x and cos x (exact x), each with about
-// wp bits of relative accuracy.
+// wp bits of relative accuracy. The reduced argument r needs as many more
+// bits of absolute accuracy as it has leading zeros; ok = false when the
+// reduction at this precision cannot even separate r from zero (x within
+// 2^-wp of a multiple of π/2), so that the Ziv loop raises the precision.
 func sincosBall(x *big.Float, wp uint) (*ball, *ball, bool) {
-	r, q := reduceHalfPi(x, wp+32)
-	er, ok := r.expLower()
-	if !ok {
-		return nil, nil, false
-	}
 	j := trigSplit(wp)
-	w := wp + 2*j + 20
-	if er < 0 {
-		w += uint(-er)
+	base := wp + 2*j + 20
+	w := base
+	var r *ball
+	var q int
+	for {
 		r, q = reduceHalfPi(x, w+8)
-		if _, ok := r.expLower(); !ok {
+		er, ok := r.expLower()
+		if !ok {
 			return nil, nil, false
 		}
+		need := base + uint(max(0, -er))
+		if need <= w {
+			break
+		}
+		w = need
 	}
 	s, c := sincosCore(fxFromBall(r, w), j)
 	var sb, cb ball
@@ -165,36 +169,32 @@ func trig(z, x *big.Float, which int) *big.Float {
 	}
 	p := z.Prec()
 	ex := int64(x.MantExp(nil))
-	switch which {
-	case 0: // x - sin x in (0, x³/6) for x > 0
-		if 3*ex <= nearBound(x, p) {
-			return finish(z, proxyNear(x, -x.Sign(), p), 0)
-		}
-	case 1: // 1 - cos x in (0, x²/2)
-		if one := big.NewFloat(1); 2*ex-1 <= nearBound(one, p) {
-			return finish(z, proxyNear(one, -1, p), 0)
-		}
-	case 2: // tan x - x in (0, |x|³) for 0 < x < 1/2
-		if 3*ex <= nearBound(x, p) {
-			return finish(z, proxyNear(x, x.Sign(), p), 0)
-		}
+	one := big.NewFloat(1)
+	switch {
+	case which == 0 && 3*ex <= nearBound(x, p):
+		// x - sin x in (0, x³/6) for x > 0
+		return finish(z, proxyNear(x, -x.Sign(), p), 0)
+	case which == 1 && 2*ex-1 <= nearBound(one, p):
+		// 1 - cos x in (0, x²/2)
+		return finish(z, proxyNear(one, -1, p), 0)
+	case which == 2 && 3*ex <= nearBound(x, p):
+		// tan x - x in (0, |x|³) for 0 < x < 1/2
+		return finish(z, proxyNear(x, x.Sign(), p), 0)
 	}
 	x = new(big.Float).Set(x)
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
 		s, c, ok := sincosBall(x, wp)
-		if !ok {
+		switch {
+		case !ok:
 			return nil, 0, false
-		}
-		switch which {
-		case 0:
+		case which == 0:
 			return s, 0, true
-		case 1:
+		case which == 1:
 			return c, 0, true
 		}
+		// c has relative accuracy: it excludes zero
 		var t ball
-		if !t.quo(s, c, wp) {
-			return nil, 0, false
-		}
+		must(t.quo(s, c, wp))
 		return &t, 0, true
 	})
 }
@@ -211,93 +211,80 @@ func atanCore(t *fx, j uint) *fx {
 	for i := uint(0); i < j; i++ {
 		u.mul(&y, &y)
 		u.add(&u, &one)
-		u.sqrt(&u)
+		must(u.sqrt(&u))
 		u.add(&u, &one)
-		y.quo(&y, &u)
+		must(y.quo(&y, &u))
 	}
-	lt := int64(y.log2bnd())
-	if lt > -1 {
-		lt = -1
+	// lt >= 1-w: log2bnd counts the error bound
+	lt := min(int64(y.log2bnd()), -1)
+	n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
+	u.mul(&y, &y)
+	var c, s fx
+	c.w = w
+	coef := func(k int64) *fx {
+		c.v.Lsh(big.NewInt(1), w)
+		c.v.Quo(&c.v, big.NewInt(2*k+1))
+		c.e = 1
+		return &c
 	}
-	var s fx
-	if lt >= -int64(w) {
-		n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
-		u.mul(&y, &y)
-		var c fx
-		c.w = w
-		coef := func(k int64) *fx {
-			c.v.Lsh(big.NewInt(1), w)
-			c.v.Quo(&c.v, big.NewInt(2*k+1))
-			c.e = 1
-			return &c
-		}
-		s.set(coef(n))
-		for k := n - 1; k >= 0; k-- {
-			s.mul(&s, &u)
-			s.sub(coef(k), &s)
-		}
-		s.mul(&s, &y)
-	} else {
-		s.set(&y)
+	s.set(coef(n))
+	for k := n - 1; k >= 0; k-- {
+		s.mul(&s, &u)
+		s.sub(coef(k), &s)
 	}
+	s.mul(&s, &y)
 	s.e = addUp(s.e, 1)
 	return s.shl(&s, j)
 }
 
-// atanBall encloses atan t for a ball t, with about wp bits of relative
-// accuracy: |atan T - atan t| <= |T - t|.
-func atanBall(t *ball, wp uint) (*ball, bool) {
+// atanBall encloses atan t for a ball t that excludes zero, with about wp
+// bits of relative accuracy: |atan T - atan t| <= |T - t|.
+func atanBall(t *ball, wp uint) *ball {
 	el, ok := t.expLower()
-	if !ok {
-		return nil, false
-	}
+	must(ok)
 	z := new(ball)
 	eu := t.expUpper()
+	j := trigSplit(wp)
+	w := wp + 2*j + 16
 	switch {
 	case eu < -int64(wp/2)-4:
 		// atan t = t(1 - t²/3 + ...): within |t|³ of t.
 		z.set(t)
 		z.addRad(magMul(magMul(t.upper(), t.upper()), t.upper()))
 	case eu <= 0 || cmpAbs(&t.m, big.NewFloat(1)) <= 0:
-		j := trigSplit(wp)
-		w := wp + 2*j + 16
-		if el < 0 {
-			w += uint(-el)
-		}
+		w += uint(max(0, -el))
 		atanCore(fxFromBall(t, w), j).toBall(z)
 	default:
 		// |t| > 1: sign(t)·π/2 - atan(1/t), absolute accuracy suffices.
-		j := trigSplit(wp)
-		w := wp + 2*j + 16
-		var one, u ball
+		var one, u, a ball
 		one.setInt64(1)
-		if !u.quo(&one, t, w) {
-			return nil, false
-		}
-		var a ball
+		must(u.quo(&one, t, w))
 		atanCore(fxFromBall(&u, w), j).toBall(&a)
-		h := piBall(w)
-		h.mul2exp(h, -1)
-		if t.m.Sign() < 0 {
-			h.neg(h)
-		}
+		h := halfPiBall(w, t.m.Sign() < 0)
 		z.sub(h, &a, wp+8)
 	}
-	return z, true
+	return z
+}
+
+// halfPiBall encloses ±π/2.
+func halfPiBall(w uint, neg bool) *ball {
+	h := piBall(w)
+	h.mul2exp(h, -1)
+	if neg {
+		h.neg(h)
+	}
+	return h
 }
 
 // atan2Ball encloses atan2(y, x) for exact non-zero finite y, x.
-func atan2Ball(y, x *big.Float, wp uint) (*ball, bool) {
+func atan2Ball(y, x *big.Float, wp uint) *ball {
 	var yb, xb, q ball
 	yb.setExact(y)
 	xb.setExact(x)
 	w := wp + 16
 	if cmpAbs(y, x) <= 0 {
-		q.quo(&yb, &xb, w)
-		a, ok := atanBall(&q, w)
-		if !ok {
-			return nil, false
-		}
+		must(q.quo(&yb, &xb, w))
+		a := atanBall(&q, w)
 		if x.Sign() < 0 {
 			pb := piBall(w)
 			if y.Sign() < 0 {
@@ -305,30 +292,21 @@ func atan2Ball(y, x *big.Float, wp uint) (*ball, bool) {
 			}
 			a.add(a, pb, w)
 		}
-		return a, true
+		return a
 	}
-	q.quo(&xb, &yb, w)
-	a, ok := atanBall(&q, w)
-	if !ok {
-		return nil, false
-	}
-	h := piBall(w)
-	h.mul2exp(h, -1)
-	if y.Sign() < 0 {
-		h.neg(h)
-	}
-	a.sub(h, a, w)
-	return a, true
+	must(q.quo(&xb, &yb, w))
+	a := atanBall(&q, w)
+	return a.sub(halfPiBall(w, y.Sign() < 0), a, w)
 }
 
 // Atan sets z to the correctly rounded arctangent of x and returns z.
 // Atan(±0) = ±0, Atan(±Inf) = ±π/2.
 func Atan(z, x *big.Float) *big.Float {
 	precOf(z, x.Prec())
-	if x.IsInf() {
-		return halfPiSigned(z, x.Signbit(), 1)
-	}
-	if x.Sign() == 0 {
+	switch {
+	case x.IsInf():
+		return piMultiple(z, x.Signbit(), 1, 1)
+	case x.Sign() == 0:
 		return z.Set(x)
 	}
 	p := z.Prec()
@@ -339,16 +317,16 @@ func Atan(z, x *big.Float) *big.Float {
 	return atan2Exact(z, x, big.NewFloat(1))
 }
 
-// halfPiSigned sets z to ±k·π/2 (k = 1: ±π/2, k = 2: ±π); used for the
-// special values of Atan, Atan2, Asin and Acos.
-func halfPiSigned(z *big.Float, neg bool, k int64) *big.Float {
+// piMultiple sets z to ±k·π/2^d (correctly rounded): the special values
+// of Atan, Atan2, Asin and Acos.
+func piMultiple(z *big.Float, neg bool, k int64, d int) *big.Float {
 	precOf(z, 64)
 	return ziv(z, 0, func(wp uint) (*ball, int64, bool) {
 		b := piBall(wp + 8)
 		var kb ball
 		kb.setInt64(k)
 		b.mul(b, &kb, wp+8)
-		b.mul2exp(b, -1)
+		b.mul2exp(b, -d)
 		if neg {
 			b.neg(b)
 		}
@@ -360,8 +338,7 @@ func atan2Exact(z, y, x *big.Float) *big.Float {
 	y = new(big.Float).Set(y)
 	x = new(big.Float).Set(x)
 	return ziv(z, y.Prec()+x.Prec(), func(wp uint) (*ball, int64, bool) {
-		b, ok := atan2Ball(y, x, wp)
-		return b, 0, ok
+		return atan2Ball(y, x, wp), 0, true
 	})
 }
 
@@ -373,37 +350,25 @@ func Atan2(z, y, x *big.Float) *big.Float {
 	precOf(z, max(x.Prec(), y.Prec()))
 	ny := y.Signbit()
 	switch {
+	case y.IsInf() && x.IsInf() && x.Signbit():
+		return piMultiple(z, ny, 3, 2)
 	case y.IsInf() && x.IsInf():
-		if x.Signbit() {
-			return quarterPiTimes(z, ny, 3)
-		}
-		return quarterPiTimes(z, ny, 1)
-	case y.IsInf():
-		return halfPiSigned(z, ny, 1)
-	case x.IsInf():
-		if x.Signbit() {
-			return halfPiSigned(z, ny, 2)
-		}
+		return piMultiple(z, ny, 1, 2)
+	case y.IsInf() || x.Sign() == 0 && y.Sign() != 0:
+		return piMultiple(z, ny, 1, 1)
+	case (x.IsInf() || y.Sign() == 0) && x.Signbit():
+		return piMultiple(z, ny, 1, 0)
+	case x.IsInf() || y.Sign() == 0:
 		return zeroSign(z.SetInt64(0), ny)
-	case y.Sign() == 0:
-		if x.Signbit() {
-			return halfPiSigned(z, ny, 2)
-		}
-		return zeroSign(z.SetInt64(0), ny)
-	case x.Sign() == 0:
-		return halfPiSigned(z, ny, 1)
 	}
 	p := z.Prec()
-	if x.Sign() > 0 {
+	if x.Sign() > 0 && y.MantExp(nil) < x.MantExp(nil) {
 		// atan(y/x) with y/x dyadic and tiny: proxy as Atan does.
-		ey, ex := int64(y.MantExp(nil)), int64(x.MantExp(nil))
-		if d := ey - ex; d < 0 {
-			q := new(big.Float).SetPrec(y.Prec() + x.Prec() + p + 8)
-			q.Quo(y, x)
-			eq := int64(q.MantExp(nil))
-			if q.Acc() == big.Exact && 3*eq <= nearBound(q, p) {
-				return finish(z, proxyNear(q, -q.Sign(), p), 0)
-			}
+		q := new(big.Float).SetPrec(y.Prec() + x.Prec() + p + 8)
+		q.Quo(y, x)
+		eq := int64(q.MantExp(nil))
+		if q.Acc() == big.Exact && 3*eq <= nearBound(q, p) {
+			return finish(z, proxyNear(q, -q.Sign(), p), 0)
 		}
 	}
 	return atan2Exact(z, y, x)
@@ -411,29 +376,14 @@ func Atan2(z, y, x *big.Float) *big.Float {
 
 // zeroSign sets z (zero) to -0 when neg.
 func zeroSign(z *big.Float, neg bool) *big.Float {
-	if neg != z.Signbit() {
+	if neg {
 		z.Neg(z)
 	}
 	return z
 }
 
-func quarterPiTimes(z *big.Float, neg bool, k int64) *big.Float {
-	precOf(z, 64)
-	return ziv(z, 0, func(wp uint) (*ball, int64, bool) {
-		b := piBall(wp + 8)
-		var kb ball
-		kb.setInt64(k)
-		b.mul(b, &kb, wp+8)
-		b.mul2exp(b, -2)
-		if neg {
-			b.neg(b)
-		}
-		return b, 0, true
-	})
-}
-
 // sqrt1mx2 encloses sqrt(1 - x²) for exact |x| < 1, from the exact
-// product (1-x)(1+x).
+// product (1-x)(1+x) > 0.
 func sqrt1mx2(x *big.Float, wp uint) *ball {
 	pr := x.Prec() + uint(max(-x.MantExp(nil), 0)) + 4
 	a := new(big.Float).SetPrec(pr).Sub(big.NewFloat(1), x)
@@ -441,7 +391,7 @@ func sqrt1mx2(x *big.Float, wp uint) *ball {
 	c := new(big.Float).SetPrec(2*pr).Mul(a, b)
 	var cb, s ball
 	cb.setExact(c)
-	s.sqrt(&cb, wp)
+	must(s.sqrt(&cb, wp))
 	return &s
 }
 
@@ -453,7 +403,7 @@ func Asin(z, x *big.Float) *big.Float {
 	case c > 0:
 		nan("Asin of a number beyond [-1, 1]")
 	case c == 0:
-		return halfPiSigned(z, x.Signbit(), 1)
+		return piMultiple(z, x.Signbit(), 1, 1)
 	case x.Sign() == 0:
 		return z.Set(x)
 	}
@@ -467,11 +417,8 @@ func Asin(z, x *big.Float) *big.Float {
 		s := sqrt1mx2(x, wp+16)
 		var xb, q ball
 		xb.setExact(x)
-		if !q.quo(&xb, s, wp+16) {
-			return nil, 0, false
-		}
-		b, ok := atanBall(&q, wp)
-		return b, 0, ok
+		must(q.quo(&xb, s, wp+16))
+		return atanBall(&q, wp), 0, true
 	})
 }
 
@@ -485,22 +432,17 @@ func Acos(z, x *big.Float) *big.Float {
 	case c == 0 && x.Sign() > 0:
 		return z.SetInt64(0)
 	case c == 0:
-		return halfPiSigned(z, false, 2)
+		return piMultiple(z, false, 1, 0)
 	case x.Sign() == 0:
-		return halfPiSigned(z, false, 1)
+		return piMultiple(z, false, 1, 1)
 	}
 	x = new(big.Float).Set(x)
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
 		s := sqrt1mx2(x, wp+16)
 		var xb, q ball
 		xb.setExact(x)
-		if !q.quo(s, &xb, wp+16) {
-			return nil, 0, false
-		}
-		b, ok := atanBall(&q, wp+8)
-		if !ok {
-			return nil, 0, false
-		}
+		must(q.quo(s, &xb, wp+16))
+		b := atanBall(&q, wp+8)
 		if x.Sign() < 0 {
 			b.add(b, piBall(wp+8), wp+8)
 		}

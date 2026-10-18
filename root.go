@@ -25,11 +25,8 @@ func mantInt(x *big.Float) (*big.Int, int64) {
 	return M, int64(e) - int64(q)
 }
 
-// iroot returns floor(N^(1/n)) for N >= 0, n >= 2, and whether it is exact.
+// iroot returns floor(N^(1/n)) for N > 0, n >= 2, and whether it is exact.
 func iroot(N *big.Int, n uint) (*big.Int, bool) {
-	if N.Sign() == 0 {
-		return new(big.Int), true
-	}
 	if n == 2 {
 		r := new(big.Int).Sqrt(N)
 		var s big.Int
@@ -86,12 +83,9 @@ func rootProxy(x *big.Float, n uint, p uint) *big.Float {
 	return v.SetMantExp(v, int(exp))
 }
 
-// sqrtRound sets z to the correctly rounded square root of x >= 0, at z's
+// sqrtRound sets z to the correctly rounded square root of x > 0, at z's
 // precision and mode.
 func sqrtRound(z, x *big.Float) *big.Float {
-	if x.Sign() == 0 {
-		return z.Set(x)
-	}
 	return z.Set(rootProxy(x, 2, z.Prec()))
 }
 
@@ -155,17 +149,15 @@ func Root(z, x *big.Float, n uint) *big.Float {
 	}
 	ax := new(big.Float).Abs(x)
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
-		var l ball
-		if !logBall(&l, ax, wp+64) {
-			return nil, 0, false
-		}
-		var nb, t ball
+		var l, nb, t ball
+		logBall(&l, ax, wp+64)
 		nb.m.SetUint64(uint64(n))
-		t.quo(&l, &nb, wp+64)
+		must(t.quo(&l, &nb, wp+64))
 		if neg {
 			t.neg(&t)
 		}
-		return expBall(&t, wp)
+		b, K := expReduced(&t.m, t.r, wp)
+		return b, K, true
 	})
 }
 
