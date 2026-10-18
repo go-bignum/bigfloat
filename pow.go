@@ -59,6 +59,11 @@ func Pow(z, x, y *big.Float) *big.Float {
 		nan("Pow of a negative number to a non-integer power")
 	}
 	neg := x.Sign() < 0 && isOddInt(y)
+	if cmpAbs(x, one) == 0 {
+		// x = -1, y an integer: ±1 exactly (found by fuzzing: |x| = 1
+		// gives log|x| = 0, which no enclosure separates from 0)
+		return z.SetInt64(map[bool]int64{false: 1, true: -1}[neg])
+	}
 	ax := new(big.Float).Abs(x)
 	y = new(big.Float).Set(y)
 	p := z.Prec()

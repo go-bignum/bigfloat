@@ -165,9 +165,15 @@ func rootExact(x *big.Float, n uint64) (*big.Float, bool) {
 	return v, true
 }
 
+// powExactBits bounds the size of an exact power powExact computes.
+const powExactBits = 1 << 20
+
 // powExact: x^y for x > 0 dyadic, y = k/2^j: dyadic iff x is a perfect
-// 2^j-th power b and b^k is dyadic (k < 0 needs b a power of two). Only
-// |k| <= 1<<16 is computed; larger exact powers are not used in fixtures.
+// 2^j-th power b = m·2^e (m odd) and b^k is dyadic, which for k < 0 needs
+// m = 1. Exact powers longer than powExactBits are reported as not exact
+// (a Rounder then gives up with ErrUndecided rather than build them: the
+// bound keeps a single request from costing minutes, as an exponent of
+// 98304 on a 53-bit base did); fixtures do not use them.
 func powExact(x, y *big.Float) (*big.Float, bool) {
 	if y.Sign() == 0 || x.Cmp(big.NewFloat(1)) == 0 {
 		return big.NewFloat(1), true
@@ -197,26 +203,24 @@ func powExact(x, y *big.Float) (*big.Float, bool) {
 		}
 		b = s
 	}
-	var br, p big.Rat
-	b.Rat(&br)
+	m, e := oddPart(b)
 	kk := k.Int64()
-	neg := kk < 0
-	if neg {
-		kk = -kk
+	switch {
+	case kk < 0 && m.BitLen() != 1:
+		return nil, false // 1/m^|k| with m > 1 odd is not dyadic
+	case kk > 0 && kk*int64(m.BitLen()) > powExactBits, abs64(e*kk) > 1<<30:
+		return nil, false // too long, or beyond big.Float's exponent range
 	}
-	num := new(big.Int).Exp(br.Num(), big.NewInt(kk), nil)
-	den := new(big.Int).Exp(br.Denom(), big.NewInt(kk), nil)
-	if neg {
-		num, den = den, num
+	r := new(big.Int).Exp(m, big.NewInt(max(kk, 0)), nil) // m = 1 when kk < 0
+	v := new(big.Float).SetInt(r)
+	return v.SetMantExp(v, int(e*kk)), true
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
 	}
-	p.SetFrac(num, den)
-	d := p.Denom()
-	if d.BitLen()-1 != int(d.TrailingZeroBits()) {
-		return nil, false // denominator not a power of two
-	}
-	v := new(big.Float).SetPrec(uint(num.BitLen()) + 64)
-	v.SetRat(&p)
-	return v, true
+	return v
 }
 
 func isOdd(y *big.Float) bool {

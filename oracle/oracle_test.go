@@ -297,6 +297,7 @@ func TestExact(t *testing.T) {
 		{"pow", []string{"0", "2"}, ""}, {"pow", []string{"9", "1.5"}, "0x.d8p+5"}, {"pow", []string{"8", "0.5"}, ""},
 		{"pow", []string{"4", "-1.5"}, "0x.8p-2"}, {"pow", []string{"3", "-2"}, ""},
 		{"pow", []string{"2", "0x1p-70"}, ""}, {"pow", []string{"2", "0x1p20"}, ""},
+		{"pow", []string{"511", "131071"}, ""}, {"pow", []string{"0x1p40000", "100000"}, ""},
 		{"pi", nil, ""},
 	}
 	for _, c := range cases {
