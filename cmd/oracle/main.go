@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -48,7 +49,10 @@ func constPrecs() []uint {
 	return append(ps, 500, 1000, 2000)
 }
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+// exit is os.Exit, replaceable by tests.
+var exit = os.Exit
+
+func main() { exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("oracle", flag.ContinueOnError)
@@ -132,38 +136,37 @@ func generate(rd *oracle.Rounder, fn string, seed uint64, scale float64) (*oracl
 		h = h*131 + uint64(c)
 	}
 	r := rand.New(rand.NewPCG(seed, h))
-	add := func(name string, p uint, args []*big.Float) error {
-		res, err := rd.Round(fn, p, args...)
-		if err != nil {
-			return fmt.Errorf("%s at %d bits, %v: %w", name, p, args, err)
-		}
-		f.Cases = append(f.Cases, oracle.NewCase(name, p, args, res))
-		return nil
+	type job struct {
+		name string
+		p    uint
+		args []*big.Float
 	}
+	var jobs []job
+	regions := regionsOf(fn)
 	if oracle.Functions[fn] == 0 {
 		for _, p := range constPrecs() {
-			if err := add("const", p, nil); err != nil {
-				return nil, err
+			jobs = append(jobs, job{"const", p, nil})
+		}
+	} else {
+		for _, pc := range Precs {
+			per := max(int(float64(pc.Cases)*scale)/len(regions), 2)
+			for _, rg := range regions {
+				for i := 0; i < per; i++ {
+					jobs = append(jobs, job{rg.name, pc.Prec, rg.gen(r, pc.Prec)})
+				}
+				// arguments longer than the result: 4p+64 bits for p
+				for i := 0; i < max(per/4, 1); i++ {
+					jobs = append(jobs, job{rg.name + "/long", pc.Prec, rg.gen(r, 4*pc.Prec+64)})
+				}
 			}
 		}
-		return f, nil
 	}
-	regions := regionsOf(fn)
-	for _, pc := range Precs {
-		per := max(int(float64(pc.Cases)*scale)/len(regions), 2)
-		for _, rg := range regions {
-			for i := 0; i < per; i++ {
-				if err := add(rg.name, pc.Prec, rg.gen(r, pc.Prec)); err != nil {
-					return nil, err
-				}
-			}
-			// arguments longer than the result: 4p+64 bits for p
-			for i := 0; i < max(per/4, 1); i++ {
-				if err := add(rg.name+"/long", pc.Prec, rg.gen(r, 4*pc.Prec+64)); err != nil {
-					return nil, err
-				}
-			}
+	for _, j := range jobs {
+		res, err := rd.Round(fn, j.p, j.args...)
+		if err != nil {
+			return nil, fmt.Errorf("%s at %d bits, %v: %w", j.name, j.p, j.args, err)
 		}
+		f.Cases = append(f.Cases, oracle.NewCase(j.name, j.p, j.args, res))
 	}
 	return f, nil
 }
@@ -172,13 +175,9 @@ func writeFile(path string, f *oracle.Fixture) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	fh, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	if err := oracle.WriteFixture(fh, f); err != nil {
-		fh.Close()
-		return err
-	}
-	return fh.Close()
+	// gzip into memory cannot fail (a bytes.Buffer never refuses a write and
+	// a Fixture always encodes); the file write is the one failure point.
+	var buf bytes.Buffer
+	_ = oracle.WriteFixture(&buf, f)
+	return os.WriteFile(path, buf.Bytes(), 0o644)
 }

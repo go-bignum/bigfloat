@@ -289,5 +289,5 @@ func regionsOf(fn string) []region {
 	case "atanh":
 		return []region{tiny(0), small(0), nearPM1(), zero}
 	}
-	return []region{{"const", func(*rand.Rand, uint) []*big.Float { return nil }}}
+	return []region{{name: "const"}} // constants take no arguments
 }

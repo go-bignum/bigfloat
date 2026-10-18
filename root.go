@@ -5,6 +5,7 @@
 package bigfloat
 
 import (
+	"math"
 	"math/big"
 )
 
@@ -34,10 +35,16 @@ func iroot(N *big.Int, n uint) (*big.Int, bool) {
 	}
 	// Newton from above: x <- ((n-1)x + N/x^(n-1)) / n decreases
 	// monotonically to floor(N^(1/n)) from any starting x >= the root.
-	x := new(big.Int).Lsh(big.NewInt(1), uint(N.BitLen()+int(n)-1)/n)
+	// From a power of two the first steps only shrink x by (n-1)/n each,
+	// hundreds of steps for large n; a float64 estimate widened by 2^-20
+	// (its error is near 2^-43) starts in the quadratic regime instead.
+	x := rootStart(N, n)
 	nn := big.NewInt(int64(n))
 	n1 := big.NewInt(int64(n - 1))
 	var t, y big.Int
+	for t.Exp(x, nn, nil).Cmp(N) < 0 {
+		x.Lsh(x, 1) // not taken with rootGuess's margin
+	}
 	for {
 		t.Exp(x, n1, nil)
 		y.Quo(N, &t)
@@ -51,6 +58,28 @@ func iroot(N *big.Int, n uint) (*big.Int, bool) {
 	}
 	t.Exp(x, nn, nil)
 	return x, t.Cmp(N) == 0
+}
+
+// rootStart is rootGuess, replaceable by tests.
+var rootStart = rootGuess
+
+// rootGuess returns an integer above N^(1/n) (N > 0, n >= 3), within a
+// relative 2^-19 of it: log2 N from the top 64 bits, divided by n, read
+// back as 53 bits and a shift, then raised by 2^-20 and 1. The float64
+// error of log2 N / n is below 2^-40 relative to the root even for N of
+// 2^40 bits, well inside the margin. iroot checks the guess anyway (Newton
+// from below would stop at once).
+func rootGuess(N *big.Int, n uint) *big.Int {
+	L := N.BitLen()
+	s := max(L-64, 0)
+	top := new(big.Int).Rsh(N, uint(s))
+	m, _ := new(big.Float).SetInt(top).Float64()
+	l2 := (math.Log2(m) + float64(s)) / float64(n) // log2 of the root
+	e := max(int(math.Floor(l2))-52, 0)
+	g, _ := big.NewFloat(math.Exp2(l2 - float64(e))).Int(nil)
+	g.Add(g, new(big.Int).Rsh(g, 20))
+	g.Add(g, big.NewInt(2))
+	return g.Lsh(g, uint(e))
 }
 
 // rootProxy returns a proxy (see proxyNear) for |x|^(1/n) at precision p,
@@ -172,8 +201,12 @@ func exactRoot(x *big.Float, n uint) *big.Float {
 	if E%int64(n) != 0 {
 		return nil
 	}
-	// m > 1 an n-th power needs m >= 3^n, more than 1.5n bits.
-	if M.BitLen() > 1 && uint(M.BitLen()) < n+n/2 {
+	// m = 1: the root is 2^(e/n) (no integer root to extract); m > 1 an
+	// n-th power needs m >= 3^n, more than 1.5n bits.
+	if M.BitLen() == 1 {
+		return new(big.Float).SetMantExp(big.NewFloat(1), int(E/int64(n)))
+	}
+	if uint(M.BitLen()) < n+n/2 {
 		return nil
 	}
 	r, exact := iroot(M, n)

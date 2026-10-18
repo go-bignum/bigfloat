@@ -63,7 +63,10 @@ func StartMpmath(command []string) (*Mpmath, error) {
 	if command == nil {
 		command = DefaultMpmathCommand()
 	}
-	cmd := exec.Command(command[0], command[1:]...)
+	return start(exec.Command(command[0], command[1:]...))
+}
+
+func start(cmd *exec.Cmd) (*Mpmath, error) {
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -111,10 +114,9 @@ func (o *Mpmath) Eval(fn string, prec uint, args ...*big.Float) (*big.Float, err
 		m, e := ToMantExp(a)
 		req.A[i] = [2]any{json.Number(m.String()), e}
 	}
-	line, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
+	// strings, an integer and json.Numbers built from big.Int.String:
+	// encoding cannot fail
+	line, _ := json.Marshal(req)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if _, err := o.in.Write(append(line, '\n')); err != nil {

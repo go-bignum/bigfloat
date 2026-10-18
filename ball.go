@@ -67,12 +67,35 @@ func (z *ball) set(a *ball) *ball {
 	return z
 }
 
-func (z *ball) add(a, b *ball, wp uint) *ball {
-	return z.setMid(prep(wp).Add(&a.m, &b.m), magAdd(a.r, b.r), wp)
-}
+func (z *ball) add(a, b *ball, wp uint) *ball { return z.addSub(a, b, false, wp) }
 
-func (z *ball) sub(a, b *ball, wp uint) *ball {
-	return z.setMid(prep(wp).Sub(&a.m, &b.m), magAdd(a.r, b.r), wp)
+func (z *ball) sub(a, b *ball, wp uint) *ball { return z.addSub(a, b, true, wp) }
+
+// addSub sets z to a ± b. big.Float aligns its operands by shifting the
+// one of larger exponent by the full exponent gap, which for operands
+// 2^30 binades apart (e^x - 2^-k for huge x) costs gigabytes; an operand
+// more than wp+64 binades below the other is therefore folded into the
+// radius instead: its magnitude is below 2^-(wp+63) relative, far under
+// the rounding error of the midpoint.
+func (z *ball) addSub(a, b *ball, neg bool, wp uint) *ball {
+	r := magAdd(a.r, b.r)
+	if a.m.Sign() != 0 && b.m.Sign() != 0 {
+		gap := int64(a.m.MantExp(nil)) - int64(b.m.MantExp(nil))
+		switch {
+		case gap > int64(wp)+64:
+			return z.setMid(prep(wp).Set(&a.m), magAdd(r, magFloat(&b.m)), wp)
+		case -gap > int64(wp)+64:
+			m := prep(wp).Set(&b.m)
+			if neg {
+				m.Neg(m)
+			}
+			return z.setMid(m, magAdd(r, magFloat(&a.m)), wp)
+		}
+	}
+	if neg {
+		return z.setMid(prep(wp).Sub(&a.m, &b.m), r, wp)
+	}
+	return z.setMid(prep(wp).Add(&a.m, &b.m), r, wp)
 }
 
 func (z *ball) neg(a *ball) *ball {

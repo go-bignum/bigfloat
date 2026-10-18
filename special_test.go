@@ -241,6 +241,19 @@ func TestNaN(t *testing.T) {
 	}
 }
 
+// TestLimit: a trigonometric argument beyond MaxReductionExponent panics
+// with ErrLimit instead of computing millions of bits of π.
+func TestLimit(t *testing.T) {
+	x := new(big.Float).SetMantExp(big.NewFloat(1), bigfloat.MaxReductionExponent+1)
+	defer func() {
+		e, ok := recover().(bigfloat.ErrLimit)
+		if !ok || !strings.Contains(e.Error(), "MaxReductionExponent") {
+			t.Errorf("recovered %v, want an ErrLimit", e)
+		}
+	}()
+	bigfloat.Cos(z(53, ne), x)
+}
+
 // TestDefaultPrecision checks the big.Float conventions: a receiver of
 // precision 0 takes the operands' (the larger of two), constants 64 bits;
 // the receiver may alias an operand.

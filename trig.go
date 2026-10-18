@@ -5,6 +5,7 @@
 package bigfloat
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 )
@@ -56,6 +57,23 @@ func sincosCore(r *fx, j uint) (*fx, *fx) {
 
 var quarterPi = big.NewFloat(0.78)
 
+// MaxReductionExponent bounds the binary exponent of the arguments of Sin,
+// Cos and Tan: an argument near 2^e is reduced modulo π/2 with about e
+// bits of π, which costs time and memory growing with e (the first such
+// call at 2^22 computes four million bits of π, in seconds, later calls
+// reuse the cache). Beyond the bound these functions panic with ErrLimit
+// instead of consuming unbounded resources on an untrusted input. Set it
+// before use, not concurrently with calls.
+var MaxReductionExponent = 1 << 22
+
+// ErrLimit is the panic value of a function asked for work beyond one of
+// this package's documented resource bounds (MaxReductionExponent).
+type ErrLimit struct {
+	Msg string
+}
+
+func (e ErrLimit) Error() string { return e.Msg }
+
 // reduceHalfPi writes x = q·π/2 + r with |r| <= π/4 + ε and returns r as
 // a ball of absolute accuracy about 2^-w, and q mod 4. π is taken to as
 // many bits as x's exponent requires, so that the reduction stays exact
@@ -68,6 +86,9 @@ func reduceHalfPi(x *big.Float, w uint) (*ball, int) {
 	if ax.Abs(x).Cmp(quarterPi) <= 0 {
 		r.setExact(x)
 		return r, 0
+	}
+	if e := x.MantExp(nil); e > MaxReductionExponent {
+		panic(ErrLimit{Msg: fmt.Sprintf("bigfloat: argument 2^%d beyond MaxReductionExponent (2^%d): reducing it needs that many bits of π", e, MaxReductionExponent)})
 	}
 	ex := uint(max(x.MantExp(nil), 0))
 	// k = round(x / (π/2)) from a rough π: error far below 1/2.

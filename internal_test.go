@@ -151,6 +151,22 @@ func TestMagEdges(t *testing.T) {
 	}
 }
 
+// TestRootStart: iroot recovers from a starting point below the root.
+func TestRootStart(t *testing.T) {
+	saved := rootStart
+	defer func() { rootStart = saved }()
+	rootStart = func(*big.Int, uint) *big.Int { return big.NewInt(1) }
+	N := new(big.Int).Exp(big.NewInt(12345), big.NewInt(7), nil)
+	if r, exact := iroot(N, 7); !exact || r.Int64() != 12345 {
+		t.Errorf("iroot(12345^7, 7) = %v, %v", r, exact)
+	}
+	rootStart = saved
+	N.Add(N, big.NewInt(1))
+	if r, exact := iroot(N, 7); exact || r.Int64() != 12345 {
+		t.Errorf("iroot(12345^7+1, 7) = %v, %v", r, exact)
+	}
+}
+
 // TestExactRoot covers the exactness test of Root's large-n path.
 func TestExactRoot(t *testing.T) {
 	n := new(big.Int).Exp(big.NewInt(3), big.NewInt(1000), nil)
