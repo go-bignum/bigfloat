@@ -153,10 +153,10 @@ func Root(z, x *big.Float, n uint) *big.Float {
 		logBall(&l, ax, wp+64)
 		nb.m.SetUint64(uint64(n))
 		must(t.quo(&l, &nb, wp+64))
-		if neg {
-			t.neg(&t)
-		}
 		b, K := expReduced(&t.m, t.r, wp)
+		if neg {
+			b.neg(b) // odd n: the root of -|x| is -(|x|^(1/n))
+		}
 		return b, K, true
 	})
 }

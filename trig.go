@@ -365,9 +365,11 @@ func Atan2(z, y, x *big.Float) *big.Float {
 	if x.Sign() > 0 && y.MantExp(nil) < x.MantExp(nil) {
 		// atan(y/x) with y/x dyadic and tiny: proxy as Atan does.
 		q := new(big.Float).SetPrec(y.Prec() + x.Prec() + p + 8)
-		q.Quo(y, x)
+		q.Quo(y, x) // exact when y/x is dyadic: it then has at most prec(y) bits
+		exact := q.Acc() == big.Exact
+		q.SetPrec(q.MinPrec()) // the shortest base allows the widest proxy
 		eq := int64(q.MantExp(nil))
-		if q.Acc() == big.Exact && 3*eq <= nearBound(q, p) {
+		if exact && 3*eq <= nearBound(q, p) {
 			return finish(z, proxyNear(q, -q.Sign(), p), 0)
 		}
 	}

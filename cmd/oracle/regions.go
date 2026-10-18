@@ -196,6 +196,19 @@ func regionsOf(fn string) []region {
 				n := ns[r.IntN(6)]
 				return []*big.Float{perfectPower(r, p, n, n%2 == 1 && r.IntN(2) == 0), intF(p, int64(n))}
 			}},
+			// n·(p+2) beyond the direct integer root: through exp(log(x)/n)
+			{"large-n", func(r *rand.Rand, p uint) []*big.Float {
+				n := int64(1<<20 + r.IntN(2))
+				sign := 1
+				if n%2 == 1 && r.IntN(2) == 0 {
+					sign = -1 // odd n: negative arguments too
+				}
+				x := logu(r, p, -100000, 100000, sign)
+				if r.IntN(4) == 0 { // exact: 2^(n·s)
+					x = new(big.Float).SetPrec(p).SetMantExp(big.NewFloat(1), int(n)*(r.IntN(41)-20))
+				}
+				return []*big.Float{x, intF(p, n)}
+			}},
 		}
 	case "hypot":
 		return []region{

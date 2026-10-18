@@ -70,12 +70,7 @@ func Pow(z, x, y *big.Float) *big.Float {
 	}
 	// t = y·log|x|: its magnitude decides overflow, underflow and the
 	// near-1 results first, from a 64-bit enclosure.
-	t, ok := powLog(ax, y, 64)
-	for w := uint(128); !ok; w *= 2 {
-		// |x| within 2^-64 of 1: log|x| != 0 separates from zero once
-		// the working precision reaches about prec(x).
-		t, ok = powLog(ax, y, w)
-	}
+	t := powLog(ax, y, 64)
 	if t.lower().e > 34 {
 		if t.m.Sign() > 0 {
 			return overflow(z, neg)
@@ -92,7 +87,7 @@ func Pow(z, x, y *big.Float) *big.Float {
 	}
 	return ziv(z, x.Prec()+y.Prec(), func(wp uint) (*ball, int64, bool) {
 		eu := max(t.expUpper(), 0)
-		t, _ := powLog(ax, y, wp+uint(eu)+16)
+		t := powLog(ax, y, wp+uint(eu)+16)
 		b, K := expReduced(&t.m, t.r, wp)
 		if neg {
 			b.neg(b)
@@ -101,16 +96,16 @@ func Pow(z, x, y *big.Float) *big.Float {
 	})
 }
 
-// powLog encloses y·log x (x > 0) to wp bits; ok = false when the
-// enclosure of log x contains zero (x is too close to 1 for wp bits —
-// impossible once wp exceeds x's precision, since x != 1).
-func powLog(x, y *big.Float, wp uint) (*ball, bool) {
+// powLog encloses y·log x (x > 0, x != 1) to about wp bits of relative
+// accuracy: logBall keeps its accuracy relative near x = 1, so the
+// enclosure of log x never contains zero and t has the sign of
+// y·(x - 1).
+func powLog(x, y *big.Float, wp uint) *ball {
 	var l, yb ball
 	logBall(&l, x, wp)
 	yb.setExact(y)
 	t := new(ball)
-	t.mul(&l, &yb, wp)
-	return t, l.sign() != 0
+	return t.mul(&l, &yb, wp)
 }
 
 // powExact settles the exact cases of |x|^y (x > 0 finite, y finite
