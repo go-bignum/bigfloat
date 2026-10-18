@@ -39,6 +39,7 @@ func fakeMpmath(mode string) {
 			F string
 			P uint
 			A [][2]json.Number
+			N int
 		}
 		if err := json.Unmarshal(in.Bytes(), &q); err != nil {
 			fmt.Println(`{"x":"bad request"}`)
@@ -62,6 +63,12 @@ func fakeMpmath(mode string) {
 		case "error":
 			fmt.Println(`{"x":"ValueError('math domain error')"}`)
 			continue
+		}
+		if q.N > 0 {
+			fmt.Println(`{"t":1.5e-06}`)
+			continue
+		}
+		switch mode {
 		case "inf":
 			fmt.Println(`{"i":-1}`)
 			continue
@@ -127,6 +134,18 @@ func TestMpmathPipe(t *testing.T) {
 	res, err := r.Round("atan", 53, fl("0.75"))
 	if err != nil || len(res) != len(Modes) {
 		t.Fatalf("Round over the pipe: %v %v", res, err)
+	}
+}
+
+func TestMpmathTime(t *testing.T) {
+	if s, err := startFake(t, "self").Time("exp", 53, 100, fl("1")); err != nil || s != 1.5e-6 {
+		t.Errorf("Time = %v, %v", s, err)
+	}
+	if _, err := startFake(t, "error").Time("exp", 53, 100, fl("1")); err == nil {
+		t.Error("Time error not reported")
+	}
+	if _, err := startFake(t, "die").Time("exp", 53, 100, fl("1")); err == nil {
+		t.Error("Time on a dead process succeeded")
 	}
 }
 

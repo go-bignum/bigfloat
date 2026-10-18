@@ -25,17 +25,29 @@ const MpmathVersion = "1.4.1"
 // writes {"s": sign, "m": mantissa, "e": exponent} (or {"i": ±1} for an
 // infinity, {"x": message} for an error). Mantissas are decimal integer
 // strings, so values cross the pipe exactly. Odd roots of negative numbers
-// are taken as real (mpmath returns the principal complex root).
-const MpmathScript = `import sys,json,mpmath as M
+// are taken as real (mpmath returns the principal complex root). A request
+// with "n" is timed instead: {"t": seconds per call}, the best of five
+// loops of n calls, measured inside Python so that the pipe is not counted.
+// The script ends when its standard input does.
+const MpmathScript = `import sys,json,time,mpmath as M
 from mpmath import mp,mpf
 sys.set_int_max_str_digits(0)
 r1=lambda f:(lambda x,*a:-f(-x,*a) if x<0 else f(x,*a))
 F=dict(sqrt=M.sqrt,cbrt=r1(M.cbrt),root=r1(lambda x,n:M.root(x,int(n))),hypot=M.hypot,exp=M.exp,expm1=M.expm1,log=M.log,log1p=M.log1p,log2=lambda x:M.log(x,2),log10=M.log10,pow=M.power,sin=M.sin,cos=M.cos,tan=M.tan,asin=M.asin,acos=M.acos,atan=M.atan,atan2=M.atan2,sinh=M.sinh,cosh=M.cosh,tanh=M.tanh,asinh=M.asinh,acosh=M.acosh,atanh=M.atanh,pi=lambda:+mp.pi,e=lambda:+mp.e,ln2=lambda:+mp.ln2,ln10=lambda:+mp.ln10,euler=lambda:+mp.euler)
+def T(g,A,n):
+  b=1e9
+  for _ in range(5):
+    t=time.perf_counter()
+    for _ in range(n):g(*A)
+    b=min(b,(time.perf_counter()-t)/n)
+  return b
 for l in sys.stdin:
   q=json.loads(l);a=[(int(m),e) for m,e in q["a"]]
   mp.prec=max([q["p"]]+[abs(m).bit_length()+1 for m,e in a])
   try:
-    v=F[q["f"]](*[mpf(t) for t in a])
+    A=[mpf(t) for t in a]
+    if "n" in q:o={"t":T(F[q["f"]],A,q["n"])};print(json.dumps(o),flush=True);continue
+    v=F[q["f"]](*A)
     if M.isinf(v):o={"i":1 if v>0 else -1}
     else:s,m,e,b=v._mpf_;o={"s":s,"m":str(m),"e":e}
   except Exception as x:o={"x":repr(x)}
@@ -94,27 +106,50 @@ type request struct {
 	F string   `json:"f"`
 	P uint     `json:"p"`
 	A [][2]any `json:"a"`
+	N int      `json:"n,omitempty"`
 }
 
 type response struct {
-	S int    `json:"s"`
-	M string `json:"m"`
-	E int64  `json:"e"`
-	I int    `json:"i"`
-	X string `json:"x"`
+	S int     `json:"s"`
+	M string  `json:"m"`
+	E int64   `json:"e"`
+	I int     `json:"i"`
+	X string  `json:"x"`
+	T float64 `json:"t"`
 }
 
 // Eval implements Oracle.
 func (o *Mpmath) Eval(fn string, prec uint, args ...*big.Float) (*big.Float, error) {
-	req := request{F: fn, P: prec, A: make([][2]any, len(args))}
+	r, err := o.ask(request{F: fn, P: prec}, args)
+	if err != nil {
+		return nil, err
+	}
+	return r.value(fn)
+}
+
+// Time returns mpmath's time per call of fn at prec bits, in seconds: the
+// best of five loops of n calls, measured inside the Python process.
+func (o *Mpmath) Time(fn string, prec uint, n int, args ...*big.Float) (float64, error) {
+	r, err := o.ask(request{F: fn, P: prec, N: n}, args)
+	switch {
+	case err != nil:
+		return 0, err
+	case r.X != "":
+		return 0, fmt.Errorf("oracle: mpmath %s: %s", fn, r.X)
+	}
+	return r.T, nil
+}
+
+func (o *Mpmath) ask(req request, args []*big.Float) (*response, error) {
+	req.A = make([][2]any, len(args))
 	for i, a := range args {
 		if a.IsInf() {
-			return nil, fmt.Errorf("oracle: infinite argument to %s", fn)
+			return nil, fmt.Errorf("oracle: infinite argument to %s", req.F)
 		}
 		m, e := ToMantExp(a)
 		req.A[i] = [2]any{json.Number(m.String()), e}
 	}
-	// strings, an integer and json.Numbers built from big.Int.String:
+	// strings, integers and json.Numbers built from big.Int.String:
 	// encoding cannot fail
 	line, _ := json.Marshal(req)
 	o.mu.Lock()
@@ -130,7 +165,7 @@ func (o *Mpmath) Eval(fn string, prec uint, args ...*big.Float) (*big.Float, err
 	if err := json.Unmarshal(reply, &r); err != nil {
 		return nil, fmt.Errorf("oracle: bad reply %q: %w", reply, err)
 	}
-	return r.value(fn)
+	return &r, nil
 }
 
 func (r *response) value(fn string) (*big.Float, error) {
