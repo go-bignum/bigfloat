@@ -615,13 +615,46 @@ func Asin(z, x *big.Float) *big.Float {
 		return finish(z, proxyNear(x, x.Sign(), p), 0)
 	}
 	x = new(big.Float).Set(x)
+	small := cmpAbs(x, asinFxLimit) <= 0
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
+		if small {
+			// relative accuracy near 0: as many more bits as x has
+			// leading zeros
+			w := wp + 16 + uint(max(0, -x.MantExp(nil)))
+			b := new(ball)
+			asinFx(x, w, trigSplit(wp), func(a *fx) { a.toBall(b) })
+			return b, 0, true
+		}
 		s := sqrt1mx2(x, wp+16)
 		var xb, q ball
 		xb.setExact(x)
 		must(q.quo(&xb, s, wp+16))
 		return atanBall(&q, wp), 0, true
 	})
+}
+
+// asinFxLimit bounds the arguments of asinFx: 1 - x² >= 1/4 for the
+// fixed-point square root.
+var asinFxLimit = big.NewFloat(0.86)
+
+// asinFx evaluates asin x for an exact |x| <= 0.86 at scale w by mpmath's
+// formula (mpf_asin, libelefun.py) asin x = 2·atan(x/(1+sqrt(1-x²))),
+// whose atan argument stays below 0.6, all in fixed point, and hands the
+// result to use before the pooled workspace is released.
+func asinFx(x *big.Float, w, j uint, use func(*fx)) {
+	ws := getFxs(5)
+	defer putFxs(ws)
+	X, C, one, T, A := &(*ws)[0], &(*ws)[1], &(*ws)[2], &(*ws)[3], &(*ws)[4]
+	X.setFloat(x, w)
+	one.setInt(1, w)
+	C.mul(X, X)
+	C.sub(one, C)
+	must(C.sqrt(C)) // 1 - x² >= 1 - 0.86² > 1/4
+	C.add(C, one)
+	must(T.quo(X, C))
+	atanFx(A, T, j)
+	A.shl(A, 1)
+	use(A)
 }
 
 // Acos sets z to the correctly rounded arccosine of x, in [0, π], and
@@ -639,7 +672,22 @@ func Acos(z, x *big.Float) *big.Float {
 		return piMultiple(z, false, 1, 1)
 	}
 	x = new(big.Float).Set(x)
+	small := cmpAbs(x, asinFxLimit) <= 0
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
+		if small {
+			// acos x = π/2 - asin x, in [0.52, 2.62]: absolute accuracy
+			// suffices. π at scale w-1 is π/2 at scale w.
+			w := wp + 16
+			b := new(ball)
+			asinFx(x, w, trigSplit(wp), func(a *fx) {
+				var h fx
+				h.set(piFx(w - 1))
+				h.w = w
+				h.sub(&h, a)
+				h.toBall(b)
+			})
+			return b, 0, true
+		}
 		s := sqrt1mx2(x, wp+16)
 		var xb, q ball
 		xb.setExact(x)

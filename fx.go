@@ -28,6 +28,7 @@ type fx struct {
 	e    float64
 	w    uint
 	t, k big.Int
+	u    big.Int   // isqrt scratch
 	f    big.Float // conversion scratch
 }
 
@@ -173,19 +174,46 @@ func (z *fx) quo(a, b *fx) bool {
 	return true
 }
 
-// sqrt of a ball whose points are all >= 1/4: |sqrt(A)-sqrt(a)| <=
-// |A-a|/(2·sqrt(min)), plus one ulp for the integer square root.
+// sqrt of a ball whose points are all >= 1/16 (lowbnd, a power of two
+// below the value less its error, must show it): |sqrt(A)-sqrt(a)| <=
+// |A-a|/(2·sqrt(min)), at most twice the error, plus one ulp for the
+// integer square root.
 func (z *fx) sqrt(a *fx) bool {
 	lb := a.lowbnd()
-	if lb < 0.25 || a.v.Sign() < 0 {
+	if lb < 1.0/16 || a.v.Sign() < 0 {
 		return false
 	}
 	e := addUp(up(a.e/(2*down(math.Sqrt(lb)))), 1)
 	z.t.Lsh(&a.v, a.w)
 	z.w = a.w
-	z.v.Sqrt(&z.t)
+	isqrt(&z.v, &z.t, &z.k, &z.u)
 	z.e = e
 	return true
+}
+
+// isqrt sets z to floor(sqrt(n)) for n > 0, with s and r as scratch (all
+// four distinct). big.Int.Sqrt allocates on every call; this is the same
+// Newton iteration from above (z <- (z + n/z)/2, stopping when it no
+// longer decreases: Brent & Zimmermann, MCA §1.5.1, SqrtInt), started from
+// a float64 estimate of the top 62 bits raised past the root, so that the
+// iteration is quadratic from the first step and reuses its integers.
+func isqrt(z, n, s, r *big.Int) {
+	L := n.BitLen()
+	shift := uint(max(L-62, 0)) &^ 1 // even, top keeps 61 or 62 bits
+	s.Rsh(n, shift)
+	// sqrt(n) < sqrt(top+1)·2^(shift/2) <= (floor(sqrt(top)) + 2)·2^(shift/2):
+	// float64(top) is within 2^-53 relative, sqrt(top+1) - sqrt(top) < 1.
+	z.SetUint64(uint64(math.Sqrt(float64(s.Uint64()))) + 2)
+	z.Lsh(z, shift/2)
+	for {
+		s.QuoRem(n, z, r)
+		s.Add(s, z)
+		s.Rsh(s, 1)
+		if s.Cmp(z) >= 0 {
+			return
+		}
+		z.Set(s)
+	}
 }
 
 // fxFromBall converts a ball to fixed point at scale w (truncation adds one

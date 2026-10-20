@@ -5,6 +5,7 @@
 package bigfloat
 
 import (
+	"math"
 	"math/big"
 )
 
@@ -74,24 +75,28 @@ func Pow(z, x, y *big.Float) *big.Float {
 		return finish(z, v, K)
 	}
 	// t = y·log|x|: its magnitude decides overflow, underflow and the
-	// near-1 results first, from a 64-bit enclosure.
-	t := powLog(ax, y, 64)
-	if t.lower().e > 34 {
-		if t.m.Sign() > 0 {
-			return overflow(z, neg)
+	// near-1 results first, from a float64 estimate when it is far from
+	// all three thresholds, else from a 64-bit enclosure.
+	eu, ok := powLogBound(ax, y, nearBound(one, p))
+	if !ok {
+		t := powLog(ax, y, 64)
+		if t.lower().e > 34 {
+			if t.m.Sign() > 0 {
+				return overflow(z, neg)
+			}
+			return underflow(z, neg)
 		}
-		return underflow(z, neg)
-	}
-	// |x^y - 1| <= 2|t| for |t| <= ln 2.
-	if t.expUpper()+1 <= nearBound(one, p) {
-		v := proxyNear(one, t.sign(), p)
-		if neg {
-			v.Neg(v)
+		// |x^y - 1| <= 2|t| for |t| <= ln 2.
+		if t.expUpper()+1 <= nearBound(one, p) {
+			v := proxyNear(one, t.sign(), p)
+			if neg {
+				v.Neg(v)
+			}
+			return finish(z, v, 0)
 		}
-		return finish(z, v, 0)
+		eu = max(t.expUpper(), 0)
 	}
 	return ziv(z, x.Prec()+y.Prec(), func(wp uint) (*ball, int64, bool) {
-		eu := max(t.expUpper(), 0)
 		t := powLog(ax, y, wp+uint(eu)+16)
 		b, K := expReduced(&t.m, t.r, wp)
 		if neg {
@@ -99,6 +104,29 @@ func Pow(z, x, y *big.Float) *big.Float {
 		}
 		return b, K, true
 	})
+}
+
+// powLogBound bounds |t| = |y·log x| (x > 0, x != 1, y != 0) from float64
+// values, and reports ok when the bounds show that t neither overflows nor
+// underflows exp (|t| < 2^33), nor needs the near-1 proxy (|t| >= 2^nb);
+// e then bounds log2|t| from above (e >= 0), as the 64-bit enclosure's
+// expUpper would. x and y are rounded to float64 (relative errors 2^-53,
+// moving log x by at most 2^-52 absolutely), math.Log is within an ulp and
+// the product rounds once, so |t - tf| <= |y|·2^-50 + |tf|·2^-50.
+func powLogBound(x, y *big.Float, nb int64) (e int64, ok bool) {
+	ex, ey := x.MantExp(nil), y.MantExp(nil)
+	if ex < -1000 || ex > 1000 || ey < -1000 || ey > 1000 {
+		return 0, false
+	}
+	xf, _ := x.Float64()
+	yf, _ := y.Float64()
+	tf := math.Abs(yf * math.Log(xf))
+	err := math.Abs(yf)*0x1p-50 + tf*0x1p-50
+	lo, hi := tf-err, tf+err
+	if !(lo > 0 && lo >= math.Ldexp(1, int(max(nb, -1000))) && hi < 0x1p33) {
+		return 0, false
+	}
+	return max(int64(math.Ilogb(hi))+2, 0), true
 }
 
 // powLog encloses y·log x (x > 0, x != 1) to about wp bits of relative
