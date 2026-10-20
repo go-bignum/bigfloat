@@ -17,10 +17,17 @@ import (
 // upper bound by rounding every operation on it upwards. Values handled in
 // fixed point are small (|x| < 2^60), which keeps the magnitude bounds
 // representable.
+//
+// The operations do not allocate once the operands have reached their size:
+// big.Int reallocates a destination that aliases an operand of Mul, and
+// allocates a remainder for Quo, so each fx carries scratch integers that
+// take those roles (t, the full product or the remainder; k, a small
+// divisor) and keep their capacity from one series term to the next.
 type fx struct {
-	v big.Int
-	e float64
-	w uint
+	v    big.Int
+	e    float64
+	w    uint
+	t, k big.Int
 }
 
 func addUp(a, b float64) float64 { return up(a + b) }
@@ -43,10 +50,10 @@ func (a *fx) bnd() float64 {
 
 // log2bnd returns an integer b with |x| <= 2^b for every point of a.
 func (a *fx) log2bnd() int {
-	var t big.Int
-	t.Abs(&a.v)
-	t.Add(&t, big.NewInt(int64(math.Ceil(a.e))))
-	return t.BitLen() - int(a.w)
+	a.t.Abs(&a.v)
+	a.k.SetUint64(uint64(min(math.Ceil(a.e), 1<<62))) // e is finite in practice
+	a.t.Add(&a.t, &a.k)
+	return a.t.BitLen() - int(a.w)
 }
 
 // lowbnd returns a lower bound on |x| for every point of a (0 if it may
@@ -83,8 +90,8 @@ func (z *fx) mul(a, b *fx) *fx {
 	ma, mb := a.bnd(), b.bnd()
 	e := addUp(addUp(mulUp(ma, b.e), mulUp(mb, a.e)), 1)
 	z.w = a.w
-	z.v.Mul(&a.v, &b.v)
-	z.v.Rsh(&z.v, a.w)
+	z.t.Mul(&a.v, &b.v) // z.t is never an operand: no aliasing copy
+	z.v.Rsh(&z.t, a.w)
 	z.e = e
 	return z
 }
@@ -107,11 +114,10 @@ func (z *fx) sub(a, b *fx) *fx {
 
 // divSmall divides by the positive integer k (truncation: one ulp).
 func (z *fx) divSmall(a *fx, k uint64) *fx {
-	var kk big.Int
-	kk.SetUint64(k)
 	e := addUp(up(a.e/float64(k)), 1)
 	z.w = a.w
-	z.v.Quo(&a.v, &kk)
+	z.k.SetUint64(k)
+	z.v.QuoRem(&a.v, &z.k, &z.t) // QuoRem reuses z.t; Quo would allocate a remainder
 	z.e = e
 	return z
 }
@@ -144,10 +150,9 @@ func (z *fx) quo(a, b *fx) bool {
 	}
 	q := up(a.bnd() / lb)
 	e := addUp(up(addUp(a.e, mulUp(q, b.e))/lb), 1)
-	var t big.Int
-	t.Lsh(&a.v, a.w)
+	z.t.Lsh(&a.v, a.w)
 	z.w = a.w
-	z.v.Quo(&t, &b.v)
+	z.v.QuoRem(&z.t, &b.v, &z.k)
 	z.e = e
 	return true
 }
@@ -160,10 +165,9 @@ func (z *fx) sqrt(a *fx) bool {
 		return false
 	}
 	e := addUp(up(a.e/(2*down(math.Sqrt(lb)))), 1)
-	var t big.Int
-	t.Lsh(&a.v, a.w)
+	z.t.Lsh(&a.v, a.w)
 	z.w = a.w
-	z.v.Sqrt(&t)
+	z.v.Sqrt(&z.t)
 	z.e = e
 	return true
 }
