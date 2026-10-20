@@ -239,23 +239,60 @@ func atanCore(t *fx, j uint) *fx {
 	// lt >= 1-w: log2bnd counts the error bound
 	lt := min(int64(y.log2bnd()), -1)
 	n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
-	u.mul(&y, &y)
-	var c, s fx
-	c.w = w
-	coef := func(k int64) *fx {
-		c.v.Lsh(big.NewInt(1), w)
-		c.v.Quo(&c.v, big.NewInt(2*k+1))
-		c.e = 1
-		return &c
+	s := oddSeries(&y, n, true)
+	s.e = addUp(s.e, 1) // tail
+	return s.shl(s, j)
+}
+
+// atanShift sets the grid of the atan table: atan(n/2^atanShift), as
+// mpmath's ATAN_TAYLOR_SHIFT.
+const atanShift = 7
+
+// atanTable caches atan(n/2^7), n = 1 … 2^7, computed by atanCore.
+var atanTable = &fxTable{compute: func(n int64, W uint) *fx {
+	var a fx
+	a.setInt(n, W)
+	a.v.Rsh(&a.v, atanShift) // exact: n/2^7 at scale W > 7
+	return atanCore(&a, trigSplit(W))
+}}
+
+// atanFx returns atan t for a fixed-point ball with |t| <= 1 (up to its
+// error bound). Up to tableMaxPrec it uses mpmath's table reduction
+// (atan_taylor, libelefun.py): with a = n/2^7 the grid point below |t|,
+// atan t = atan a + atan d, d = (t-a)/(1+a·t) in [0, 2^-7), so that the
+// series gains 14 bits per term with no square root; atan a comes from the
+// table. Above, or for |t| < 2^-7, atanCore with j halvings.
+func atanFx(t *fx, j uint) *fx {
+	w := t.w
+	if w > tableMaxPrec {
+		return atanCore(t, j)
 	}
-	s.set(coef(n))
-	for k := n - 1; k >= 0; k-- {
-		s.mul(&s, &u)
-		s.sub(coef(k), &s)
+	neg := t.v.Sign() < 0
+	var at fx
+	at.set(t)
+	if neg {
+		at.v.Neg(&at.v)
 	}
-	s.mul(&s, &y)
-	s.e = addUp(s.e, 1)
-	return s.shl(&s, j)
+	var nn fx
+	nn.v.Rsh(&at.v, w-atanShift)
+	n := min(nn.v.Int64(), 1<<atanShift)
+	if n == 0 {
+		return atanCore(t, 0)
+	}
+	var a, one, num, den fx
+	a.setInt(n, w)
+	a.v.Rsh(&a.v, atanShift)
+	one.setInt(1, w)
+	num.sub(&at, &a)
+	den.mul(&a, &at)
+	den.add(&den, &one)
+	must(num.quo(&num, &den)) // den >= 1 - ulps
+	s := atanCore(&num, 0)
+	s.add(s, atanTable.get(n, w))
+	if neg {
+		s.v.Neg(&s.v)
+	}
+	return s
 }
 
 // atanBall encloses atan t for a ball t that excludes zero, with about wp
@@ -274,13 +311,13 @@ func atanBall(t *ball, wp uint) *ball {
 		z.addRad(magMul(magMul(t.upper(), t.upper()), t.upper()))
 	case eu <= 0 || cmpAbs(&t.m, big.NewFloat(1)) <= 0:
 		w += uint(max(0, -el))
-		atanCore(fxFromBall(t, w), j).toBall(z)
+		atanFx(fxFromBall(t, w), j).toBall(z)
 	default:
 		// |t| > 1: sign(t)·π/2 - atan(1/t), absolute accuracy suffices.
 		var one, u, a ball
 		one.setInt64(1)
 		must(u.quo(&one, t, w))
-		atanCore(fxFromBall(&u, w), j).toBall(&a)
+		atanFx(fxFromBall(&u, w), j).toBall(&a)
 		h := halfPiBall(w, t.m.Sign() < 0)
 		z.sub(h, &a, wp+8)
 	}

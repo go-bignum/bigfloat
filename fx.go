@@ -41,11 +41,13 @@ func mulUp(a, b float64) float64 {
 // bnd returns an upper bound on |x| (real units) for every point x of a.
 func (a *fx) bnd() float64 {
 	n := a.v.BitLen()
-	b := math.Ldexp(1, n-int(a.w))
+	// Both terms are kept at or above the smallest subnormal, where Ldexp
+	// would otherwise round them to zero or downwards at scales w > 1074.
+	b := math.Ldexp(1, max(n-int(a.w), -1074))
 	if n == 0 {
 		b = 0
 	}
-	return addUp(b, math.Ldexp(a.e, -int(a.w)))
+	return addUp(b, up(math.Ldexp(a.e, -int(a.w))))
 }
 
 // log2bnd returns an integer b with |x| <= 2^b for every point of a.
@@ -124,7 +126,7 @@ func (z *fx) divSmall(a *fx, k uint64) *fx {
 
 // shr divides by 2^s (floor: one ulp).
 func (z *fx) shr(a *fx, s uint) *fx {
-	e := addUp(math.Ldexp(a.e, -int(s)), 1)
+	e := addUp(up(math.Ldexp(a.e, -int(s))), 1)
 	z.w = a.w
 	z.v.Rsh(&a.v, s)
 	z.e = e

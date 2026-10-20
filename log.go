@@ -18,30 +18,41 @@ func atanhSeries(t *fx) *fx {
 	lt := min(int64(t.log2bnd()), -1)
 	// 1 + lt(2n+3) <= -w
 	n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
-	var u, y, c fx
-	u.mul(t, t)
-	c.w = w
-	coef := func(k int64) *fx {
-		c.v.Lsh(big.NewInt(1), w)
-		c.v.Quo(&c.v, big.NewInt(2*k+1))
-		c.e = 1
-		return &c
-	}
-	y.set(coef(n))
-	for k := n - 1; k >= 0; k-- {
-		y.mul(&y, &u)
-		y.add(&y, coef(k))
-	}
-	y.mul(&y, t)
-	y.e = addUp(y.e, 1)
-	return &y
+	y := oddSeries(t, n, false)
+	y.e = addUp(y.e, 1) // tail
+	return y
 }
 
 // logReduced encloses log m for an exact m in [1/sqrt2, sqrt2) as
 // 2·atanh((m-1)/(m+1)), |(m-1)/(m+1)| <= 0.1716, at scale w: the quotient
 // is formed from the exact integer mantissa, truncated once.
+//
+// Up to tableMaxPrec it uses mpmath's table reduction instead
+// (log_taylor_cached, libelefun.py): with a = n/2^9 the grid point below m,
+// log m = log a + 2·atanh((m-a)/(m+a)), |(m-a)/(m+a)| < 2^-9, so that the
+// series gains 18 bits per term; log a comes from the table. Within 2^-8
+// of 1 the direct quotient is already that small (and keeps the relative
+// accuracy of log m near 0, which a sum log a + … would cancel), so it is
+// used there.
 func logReduced(m *big.Float, w uint) *fx {
-	M, E := mantInt(m) // m = M·2^E, E < 0
+	M, E := mantInt(m) // m = M·2^E, E <= 0
+	if w <= tableMaxPrec {
+		c := min(E, -logShift)
+		Mi := new(big.Int).Lsh(M, uint(E-c)) // m = Mi·2^c
+		n := new(big.Int).Rsh(Mi, uint(-logShift-c)).Int64()
+		if n < 1<<logShift-2 || n > 1<<logShift+1 {
+			// a = n·2^-9 = Ai·2^c
+			Ai := new(big.Int).Lsh(big.NewInt(n), uint(-logShift-c))
+			num := new(big.Int).Sub(Mi, Ai)
+			den := Mi.Add(Mi, Ai)
+			num.Lsh(num, w)
+			t := &fx{w: w, e: 1}
+			t.v.Quo(num, den)
+			y := atanhSeries(t)
+			y.shl(y, 1)
+			return y.add(y, logTable.get(n, w))
+		}
+	}
 	one := new(big.Int).Lsh(big.NewInt(1), uint(-E))
 	num := new(big.Int).Sub(M, one)
 	den := new(big.Int).Add(M, one)
@@ -51,6 +62,21 @@ func logReduced(m *big.Float, w uint) *fx {
 	y := atanhSeries(t)
 	return y.shl(y, 1)
 }
+
+// logShift sets the grid of the log table: log(n/2^logShift), as mpmath's
+// LOG_TAYLOR_SHIFT.
+const logShift = 9
+
+// logTable caches log(n/2^9) = 2·atanh((n-2^9)/(n+2^9)) for the grid points
+// n of [1/sqrt2, sqrt2), |(n-2^9)/(n+2^9)| <= 0.172.
+var logTable = &fxTable{compute: func(n int64, W uint) *fx {
+	num := big.NewInt(n - 1<<logShift)
+	num.Lsh(num, W)
+	t := &fx{w: W, e: 1}
+	t.v.Quo(num, big.NewInt(n+1<<logShift))
+	y := atanhSeries(t)
+	return y.shl(y, 1)
+}}
 
 var sqrtHalf = big.NewFloat(0.70710678118654752440)
 
