@@ -12,15 +12,22 @@ import (
 // with |t| <= 1/2. The tail after the k = n term is at most
 // |t|^(2n+3)/(1-t²) <= 2|t|^(2n+3).
 func atanhSeries(t *fx) *fx {
+	y := new(fx)
+	atanhSeriesTo(y, t)
+	return y
+}
+
+// atanhSeriesTo is atanhSeries into dst (distinct from t; t's scratch is
+// written).
+func atanhSeriesTo(dst, t *fx) {
 	w := t.w
 	// every caller has |t| <= 1/3; log2bnd counts the error bound, so
 	// lt >= 1 - w and n stays positive
 	lt := min(int64(t.log2bnd()), -1)
 	// 1 + lt(2n+3) <= -w
 	n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
-	y := oddSeries(t, n, false)
-	y.e = addUp(y.e, 1) // tail
-	return y
+	oddSeries(dst, t, n, false)
+	dst.e = addUp(dst.e, 1) // tail
 }
 
 // logReduced encloses log m for an exact m in [1/sqrt2, sqrt2) as
@@ -34,33 +41,56 @@ func atanhSeries(t *fx) *fx {
 // of 1 the direct quotient is already that small (and keeps the relative
 // accuracy of log m near 0, which a sum log a + … would cancel), so it is
 // used there.
-func logReduced(m *big.Float, w uint) *fx {
-	M, E := mantInt(m) // m = M·2^E, E <= 0
+//
+// The result goes to dst.
+func logReduced(dst *fx, m *big.Float, w uint) {
+	ws := getFxs(3)
+	defer putFxs(ws)
+	t, a, b := &(*ws)[0], &(*ws)[1], &(*ws)[2]
+	M := &a.v
+	E := mantIntTo(M, &a.f, m) // m = M·2^E, E <= 0
+	t.w, t.e = w, 1            // one ulp: the truncated quotient below
 	if w <= tableMaxPrec {
 		c := min(E, -logShift)
-		Mi := new(big.Int).Lsh(M, uint(E-c)) // m = Mi·2^c
-		n := new(big.Int).Rsh(Mi, uint(-logShift-c)).Int64()
-		if n < 1<<logShift-2 || n > 1<<logShift+1 {
-			// a = n·2^-9 = Ai·2^c
-			Ai := new(big.Int).Lsh(big.NewInt(n), uint(-logShift-c))
-			num := new(big.Int).Sub(Mi, Ai)
-			den := Mi.Add(Mi, Ai)
-			num.Lsh(num, w)
-			t := &fx{w: w, e: 1}
-			t.v.Quo(num, den)
-			y := atanhSeries(t)
-			y.shl(y, 1)
-			return y.add(y, logTable.get(n, w))
+		M.Lsh(M, uint(E-c)) // m = M·2^c
+		b.v.Rsh(M, uint(-logShift-c))
+		if n := b.v.Int64(); n < 1<<logShift-2 || n > 1<<logShift+1 {
+			// a = n·2^-9 = A·2^c; t = (M-A)/(M+A)
+			b.v.SetInt64(n)
+			b.v.Lsh(&b.v, uint(-logShift-c))
+			t.v.Sub(M, &b.v)
+			M.Add(M, &b.v)
+			t.v.Lsh(&t.v, w)
+			t.v.QuoRem(&t.v, M, &b.v)
+			atanhSeriesTo(dst, t)
+			dst.shl(dst, 1)
+			dst.add(dst, logTable.get(n, w))
+			return
 		}
+		E = c
 	}
-	one := new(big.Int).Lsh(big.NewInt(1), uint(-E))
-	num := new(big.Int).Sub(M, one)
-	den := new(big.Int).Add(M, one)
-	num.Lsh(num, w)
-	t := &fx{w: w, e: 1}
-	t.v.Quo(num, den)
-	y := atanhSeries(t)
-	return y.shl(y, 1)
+	// t = (M-1)/(M+1) with 1 = 2^-E·2^E
+	b.v.SetInt64(1)
+	b.v.Lsh(&b.v, uint(-E))
+	t.v.Sub(M, &b.v)
+	M.Add(M, &b.v)
+	t.v.Lsh(&t.v, w)
+	t.v.QuoRem(&t.v, M, &b.v)
+	atanhSeriesTo(dst, t)
+	dst.shl(dst, 1)
+}
+
+// mantIntTo sets M to the integer mantissa of x (finite, non-zero, sign
+// ignored) and returns E with |x| = M·2^E, using f as scratch: mantInt
+// without allocation once M and f have grown.
+func mantIntTo(M *big.Int, f *big.Float, x *big.Float) int64 {
+	e := x.MantExp(nil)
+	q := x.Prec()
+	f.SetPrec(0) // Set takes x's precision instead of rounding
+	f.SetMantExp(x, int(q)-e)
+	f.Abs(f)
+	f.Int(M)
+	return int64(e) - int64(q)
 }
 
 // logShift sets the grid of the log table: log(n/2^logShift), as mpmath's
@@ -107,20 +137,22 @@ func logBall(z *ball, x *big.Float, wp uint) {
 		rad = magMul(mb.r, magPow2(1))
 		m = &mb.m
 	}
-	lm := logReduced(m, w)
-	var lb ball
-	lm.toBall(&lb)
+	ws := getFxs(2)
+	defer putFxs(ws)
+	lm, kl := &(*ws)[0], &(*ws)[1]
 	if e != 0 {
+		// log x = e·ln2 + log m at scale w + bitlen(e) + 4, where the |e|
+		// ulps of error of e·ln2 stay below 2^-(w+4); |log x| > 0.34.
 		ee := int64(e)
-		bl := uint(bitlenU(abs64(ee)))
-		l := ln2Ball(w + bl + 4)
-		var eb, t ball
-		eb.setInt64(ee)
-		t.mul(l, &eb, w+bl+4)
-		z.add(&t, &lb, w)
+		w2 := w + uint(bitlenU(abs64(ee))) + 4
+		logReduced(lm, m, w2)
+		kl.v.SetInt64(ee)
+		kl.mulInt(ln2Fx(w2), &kl.v)
+		lm.add(lm, kl)
 	} else {
-		z.set(&lb)
+		logReduced(lm, m, w)
 	}
+	lm.toBall(z)
 	z.addRad(rad)
 }
 

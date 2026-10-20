@@ -6,6 +6,7 @@ package bigfloat
 
 import (
 	"math"
+	"math/bits"
 	"sync"
 )
 
@@ -24,7 +25,9 @@ import (
 // the sign of term k = jm + i is (-1)^i, which the recombination applies.
 // The fixed-point operations carry every rounding error into the result's
 // error bound.
-func oddSeries(y *fx, n int64, alt bool) *fx {
+//
+// The result goes to dst (distinct from y).
+func oddSeries(dst, y *fx, n int64, alt bool) {
 	w := y.w
 	m := max(2, int(math.Sqrt(float64(n+1)))&^1)
 	// pw[1..m] = u^1..u^m, acc[0..m-1], then P and q, from a pooled
@@ -60,22 +63,30 @@ func oddSeries(y *fx, n int64, alt bool) *fx {
 			r.add(r, q)
 		}
 	}
-	return new(fx).set(r)
+	dst.set(r)
 }
 
-// fxPool recycles fixed-point workspaces (slices of fx whose integers have
+// fxPools recycle fixed-point workspaces (slices of fx whose integers have
 // grown to the size of a series' operands), so that a series costs no
-// allocation once the pool is warm.
-var fxPool sync.Pool
+// allocation once the pools are warm: pool i holds slices of capacity 2^i.
+var fxPools [12]sync.Pool
 
-// getFxs returns a workspace of at least n fixed-point values.
+// getFxs returns a workspace of n >= 1 fixed-point values. Workspaces
+// beyond the largest pool (series of millions of terms) are not recycled.
 func getFxs(n int) *[]fx {
-	if p, _ := fxPool.Get().(*[]fx); p != nil && cap(*p) >= n {
-		*p = (*p)[:n]
-		return p
+	i := bits.Len(uint(n - 1))
+	if i < len(fxPools) {
+		if p, _ := fxPools[i].Get().(*[]fx); p != nil {
+			*p = (*p)[:n]
+			return p
+		}
 	}
-	s := make([]fx, n)
+	s := make([]fx, n, 1<<i)
 	return &s
 }
 
-func putFxs(p *[]fx) { fxPool.Put(p) }
+func putFxs(p *[]fx) {
+	if i := bits.Len(uint(cap(*p) - 1)); i < len(fxPools) {
+		fxPools[i].Put(p)
+	}
+}

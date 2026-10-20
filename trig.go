@@ -17,10 +17,13 @@ func trigSplit(w uint) uint { return uint(math.Sqrt(float64(w))/3) + 1 }
 // sincosCore returns sin r and cos r for a fixed-point ball with |r| < 1:
 // both Taylor series at t = r/2^j (alternating, decreasing terms: the tail
 // is below the first omitted term), then j doublings sin 2a = 2 sin a cos a,
-// cos 2a = 1 - 2 sin² a.
-func sincosCore(r *fx, j uint) (*fx, *fx) {
+// cos 2a = 1 - 2 sin² a. The results go to s and c (distinct from r and
+// from each other).
+func sincosCore(s, c, r *fx, j uint) {
 	w := r.w
-	var t fx // log2bnd writes its scratch: a local, not the caller's r
+	ws := getFxs(3)
+	defer putFxs(ws)
+	t, one, s2 := &(*ws)[0], &(*ws)[1], &(*ws)[2]
 	t.shr(r, j)
 	lt := min(int64(t.log2bnd()), -1)
 	// cos tail <= |t|^(2n+2)/(2n+2)!, sin tail smaller.
@@ -28,10 +31,7 @@ func sincosCore(r *fx, j uint) (*fx, *fx) {
 	for lt*(2*n+2)-log2FactLower(2*n+2) > -int64(w)-1 {
 		n++
 	}
-	ws := getFxs(2)
-	defer putFxs(ws)
-	one, s2 := &(*ws)[0], &(*ws)[1]
-	s, c := sinCosSeries(&t, n)
+	sinCosSeries(s, c, t, n)
 	s.e = addUp(s.e, 1)
 	c.e = addUp(c.e, 1)
 	one.setInt(1, w)
@@ -42,7 +42,74 @@ func sincosCore(r *fx, j uint) (*fx, *fx) {
 		c.shl(s2, 1)
 		c.sub(one, c)
 	}
+}
+
+// sinCosShift sets the grid of the sin/cos tables, n/2^8 (mpmath's
+// COS_SIN_CACHE_STEP), and sinCosTableMax the largest scale they serve
+// (mpmath's COS_SIN_CACHE_PREC is 400 bits): above it the halvings of
+// sincosCore cost about as much as the table saves.
+const (
+	sinCosShift    = 8
+	sinCosTableMax = 640
+)
+
+// sinTable and cosTable cache sin(n/2^8) and cos(n/2^8) for 1 <= n <= 202
+// (|r| <= π/4 + ε), computed by sincosCore.
+var (
+	sinTable = &fxTable{compute: func(n int64, W uint) *fx { s, _ := sinCosAt(n, W); return s }}
+	cosTable = &fxTable{compute: func(n int64, W uint) *fx { _, c := sinCosAt(n, W); return c }}
+)
+
+func sinCosAt(n int64, W uint) (*fx, *fx) {
+	var a fx
+	a.setInt(n, W)
+	a.v.Rsh(&a.v, sinCosShift) // exact: n/2^8 at scale W > 8
+	s, c := new(fx), new(fx)
+	sincosCore(s, c, &a, trigSplit(W))
 	return s, c
+}
+
+// sincosFx returns sin r and cos r for a fixed-point ball with |r| < 1. Up
+// to sinCosTableMax it follows mpmath's cos_sin_basecase (libelefun.py):
+// with a = n/2^8 the grid point below |r|, d = |r| - a in [0, 2^-8), the
+// series of d need no halving, and sin(a+d) = sin a cos d + cos a sin d,
+// cos(a+d) = cos a cos d - sin a sin d with sin a, cos a from the tables.
+// Otherwise, or for |r| < 2^-8, sincosCore with j halvings. The results go
+// to s and c, as for sincosCore.
+func sincosFx(s, c, r *fx, j uint) {
+	w := r.w
+	if w > sinCosTableMax {
+		sincosCore(s, c, r, j)
+		return
+	}
+	neg := r.v.Sign() < 0
+	ws := getFxs(5)
+	defer putFxs(ws)
+	ar, sd, cd, p, q := &(*ws)[0], &(*ws)[1], &(*ws)[2], &(*ws)[3], &(*ws)[4]
+	ar.set(r)
+	if neg {
+		ar.v.Neg(&ar.v)
+	}
+	p.v.Rsh(&ar.v, w-sinCosShift)
+	n := p.v.Int64()
+	if n == 0 {
+		sincosCore(s, c, r, 0)
+		return
+	}
+	p.setInt(n, w)
+	p.v.Rsh(&p.v, sinCosShift) // a = n/2^8, exact
+	ar.sub(ar, p)
+	sincosCore(sd, cd, ar, 0)
+	sa, ca := sinTable.get(n, w), cosTable.get(n, w)
+	p.mul(sa, cd)
+	q.mul(ca, sd)
+	s.add(p, q)
+	p.mul(ca, cd)
+	q.mul(sa, sd)
+	c.sub(p, q)
+	if neg {
+		s.v.Neg(&s.v)
+	}
 }
 
 // sinCosSeries returns the Taylor polynomials of sin t and cos t to the
@@ -50,7 +117,8 @@ func sincosCore(r *fx, j uint) (*fx, *fx) {
 // caller. Both run on m accumulators of u = t² as oddSeries does, sharing
 // the powers of u: the running cos term a = u^(k-i)/(2k)! takes one
 // division, the sin term is a/(2k+1), and a advances by u^m every m terms.
-func sinCosSeries(t *fx, n int64) (*fx, *fx) {
+// The results go to s and c (distinct from t).
+func sinCosSeries(S, C, t *fx, n int64) {
 	w := t.w
 	m := max(2, int(math.Sqrt(float64(n)))&^1)
 	ws := getFxs(3*m + 4)
@@ -95,8 +163,8 @@ func sinCosSeries(t *fx, n int64) (*fx, *fx) {
 			s.add(s, q)
 		}
 	}
-	S := new(fx).mul(s, t)
-	return S, new(fx).set(c)
+	S.mul(s, t)
+	C.set(c)
 }
 
 var quarterPi = big.NewFloat(0.78)
@@ -200,7 +268,10 @@ func sincosBall(x *big.Float, wp uint) (*ball, *ball, bool) {
 		}
 		w = need
 	}
-	s, c := sincosCore(r.rescale(r, w), j)
+	ws := getFxs(2)
+	defer putFxs(ws)
+	s, c := &(*ws)[0], &(*ws)[1]
+	sincosFx(s, c, r.rescale(r, w), j)
 	var sb, cb ball
 	s.toBall(&sb)
 	c.toBall(&cb)
@@ -277,25 +348,27 @@ func trig(z, x *big.Float, which int) *big.Float {
 // atanCore returns atan t for a fixed-point ball with |t| <= 1: j
 // reductions t <- t/(1+sqrt(1+t²)) (atan t = 2 atan of the result), then
 // the alternating series Σ (-1)^k t^(2k+1)/(2k+1), whose tail is below
-// |t|^(2n+3).
-func atanCore(t *fx, j uint) *fx {
+// |t|^(2n+3). The result goes to dst (distinct from t).
+func atanCore(dst, t *fx, j uint) {
 	w := t.w
-	var y, one, u fx
+	ws := getFxs(3)
+	defer putFxs(ws)
+	y, one, u := &(*ws)[0], &(*ws)[1], &(*ws)[2]
 	one.setInt(1, w)
 	y.set(t)
 	for i := uint(0); i < j; i++ {
-		u.mul(&y, &y)
-		u.add(&u, &one)
-		must(u.sqrt(&u))
-		u.add(&u, &one)
-		must(y.quo(&y, &u))
+		u.mul(y, y)
+		u.add(u, one)
+		must(u.sqrt(u))
+		u.add(u, one)
+		must(y.quo(y, u))
 	}
 	// lt >= 1-w: log2bnd counts the error bound
 	lt := min(int64(y.log2bnd()), -1)
 	n := (int64(w)+1+(-lt)-1)/(-lt)/2 + 1
-	s := oddSeries(&y, n, true)
-	s.e = addUp(s.e, 1) // tail
-	return s.shl(s, j)
+	oddSeries(dst, y, n, true)
+	dst.e = addUp(dst.e, 1) // tail
+	dst.shl(dst, j)
 }
 
 // atanShift sets the grid of the atan table: atan(n/2^atanShift), as
@@ -307,7 +380,9 @@ var atanTable = &fxTable{compute: func(n int64, W uint) *fx {
 	var a fx
 	a.setInt(n, W)
 	a.v.Rsh(&a.v, atanShift) // exact: n/2^7 at scale W > 7
-	return atanCore(&a, trigSplit(W))
+	z := new(fx)
+	atanCore(z, &a, trigSplit(W))
+	return z
 }}
 
 // atanFx returns atan t for a fixed-point ball with |t| <= 1 (up to its
@@ -315,38 +390,40 @@ var atanTable = &fxTable{compute: func(n int64, W uint) *fx {
 // (atan_taylor, libelefun.py): with a = n/2^7 the grid point below |t|,
 // atan t = atan a + atan d, d = (t-a)/(1+a·t) in [0, 2^-7), so that the
 // series gains 14 bits per term with no square root; atan a comes from the
-// table. Above, or for |t| < 2^-7, atanCore with j halvings.
-func atanFx(t *fx, j uint) *fx {
+// table. Above, or for |t| < 2^-7, atanCore with j halvings. The result
+// goes to dst (distinct from t).
+func atanFx(dst, t *fx, j uint) {
 	w := t.w
 	if w > tableMaxPrec {
-		return atanCore(t, j)
+		atanCore(dst, t, j)
+		return
 	}
 	neg := t.v.Sign() < 0
-	var at fx
+	ws := getFxs(4)
+	defer putFxs(ws)
+	at, a, one, den := &(*ws)[0], &(*ws)[1], &(*ws)[2], &(*ws)[3]
 	at.set(t)
 	if neg {
 		at.v.Neg(&at.v)
 	}
-	var nn fx
-	nn.v.Rsh(&at.v, w-atanShift)
-	n := min(nn.v.Int64(), 1<<atanShift)
+	a.v.Rsh(&at.v, w-atanShift)
+	n := min(a.v.Int64(), 1<<atanShift)
 	if n == 0 {
-		return atanCore(t, 0)
+		atanCore(dst, t, 0)
+		return
 	}
-	var a, one, num, den fx
 	a.setInt(n, w)
 	a.v.Rsh(&a.v, atanShift)
 	one.setInt(1, w)
-	num.sub(&at, &a)
-	den.mul(&a, &at)
-	den.add(&den, &one)
-	must(num.quo(&num, &den)) // den >= 1 - ulps
-	s := atanCore(&num, 0)
-	s.add(s, atanTable.get(n, w))
+	den.mul(a, at)
+	den.add(den, one)
+	at.sub(at, a)
+	must(at.quo(at, den)) // den >= 1 - ulps
+	atanCore(dst, at, 0)
+	dst.add(dst, atanTable.get(n, w))
 	if neg {
-		s.v.Neg(&s.v)
+		dst.v.Neg(&dst.v)
 	}
-	return s
 }
 
 // atanBall encloses atan t for a ball t that excludes zero, with about wp
@@ -365,13 +442,19 @@ func atanBall(t *ball, wp uint) *ball {
 		z.addRad(magMul(magMul(t.upper(), t.upper()), t.upper()))
 	case eu <= 0 || cmpAbs(&t.m, big.NewFloat(1)) <= 0:
 		w += uint(max(0, -el))
-		atanFx(fxFromBall(t, w), j).toBall(z)
+		ws := getFxs(2)
+		defer putFxs(ws)
+		atanFx(&(*ws)[1], (*ws)[0].setBall(t, w), j)
+		(*ws)[1].toBall(z)
 	default:
 		// |t| > 1: sign(t)·π/2 - atan(1/t), absolute accuracy suffices.
 		var one, u, a ball
 		one.setInt64(1)
 		must(u.quo(&one, t, w))
-		atanFx(fxFromBall(&u, w), j).toBall(&a)
+		ws := getFxs(2)
+		defer putFxs(ws)
+		atanFx(&(*ws)[1], (*ws)[0].setBall(&u, w), j)
+		(*ws)[1].toBall(&a)
 		h := halfPiBall(w, t.m.Sign() < 0)
 		z.sub(h, &a, wp+8)
 	}
@@ -426,7 +509,12 @@ func Atan(z, x *big.Float) *big.Float {
 	if ex := int64(x.MantExp(nil)); 3*ex <= nearBound(x, p) {
 		return finish(z, proxyNear(x, -x.Sign(), p), 0)
 	}
-	return atan2Exact(z, x, big.NewFloat(1))
+	// atan of the exact x itself: atan2(x, 1) would divide by one first
+	var xb ball
+	xb.setExact(x)
+	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
+		return atanBall(&xb, wp), 0, true
+	})
 }
 
 // piMultiple sets z to ±k·π/2^d (correctly rounded): the special values

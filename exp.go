@@ -31,8 +31,9 @@ func taylorTerms(lt int64, w uint) int64 {
 // expCore returns e^r for a fixed-point ball: Taylor series of e^(r/2^s')
 // by Horner's rule, then s' squarings, where s' >= s makes |r/2^s'| <= 1/2
 // whatever r. The tail Σ_{k>n} |t|^k/k! is at most 2|t|^(n+1)/(n+1)! for
-// |t| <= 1/2.
-func expCore(r *fx, s uint) *fx {
+// |t| <= 1/2. The result goes to y (distinct from r; r's scratch is
+// written).
+func expCore(y, r *fx, s uint) {
 	w := r.w
 	s += uint(max(0, r.log2bnd()+1))
 	ws := getFxs(1)
@@ -40,12 +41,11 @@ func expCore(r *fx, s uint) *fx {
 	t := &(*ws)[0]
 	t.shr(r, s)
 	n := taylorTerms(min(int64(t.log2bnd()), -1), w)
-	y := expSeries(t, n)
+	expSeries(y, t, n)
 	y.e = addUp(y.e, 1) // truncation
 	for i := uint(0); i < s; i++ {
 		y.mul(y, y)
 	}
-	return y
 }
 
 // expSeries returns Σ_{k=0}^{n} t^k/k! for a fixed-point ball t, |t| <= 1/2
@@ -53,7 +53,8 @@ func expCore(r *fx, s uint) *fx {
 // by k mod m, acc_i holding them without their factor t^i: the running term
 // a = t^(k-i)/k! takes one division per term and one multiplication by t^m
 // every m terms (mpmath's exp_basecase runs two such sums, libelefun.py).
-func expSeries(t *fx, n int64) *fx {
+// The result goes to dst (distinct from t).
+func expSeries(dst, t *fx, n int64) {
 	w := t.w
 	m := max(2, int(math.Sqrt(float64(n))))
 	ws := getFxs(2*m + 3)
@@ -83,7 +84,7 @@ func expSeries(t *fx, n int64) *fx {
 		q.mul(&acc[i], &pw[i])
 		r.add(r, q)
 	}
-	return new(fx).set(r)
+	dst.set(r)
 }
 
 func bitlenU(n int64) int { return bits.Len64(uint64(n)) } // n >= 0
@@ -119,9 +120,10 @@ func expReduced(x *big.Float, xr mag, wp uint) (*ball, int64) {
 		rb.r = xr
 		r.e = addUp(r.e, fxFromBall(&rb, w).e)
 	}
-	var b ball
-	expCore(r, s).toBall(&b)
-	return &b, k
+	b := new(ball)
+	expCore(kl, r, s)
+	kl.toBall(b)
+	return b, k
 }
 
 func abs64(k int64) int64 {
