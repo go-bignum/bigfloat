@@ -7,6 +7,7 @@ package bigfloat
 import (
 	"fmt"
 	"math/big"
+	"sync"
 )
 
 // A proxy is an exact big.Float v standing in for a real result y: rounding
@@ -21,10 +22,19 @@ import (
 // or half of it below a power of two, so neither y nor v crosses one.
 // base is finite and non-zero, dir is ±1.
 func proxyNear(base *big.Float, dir int, p uint) *big.Float {
+	var d big.Float
+	return proxyNearTo(new(big.Float), &d, base, dir, p)
+}
+
+// proxyNearTo is proxyNear computed into z, with d as scratch (both
+// distinct from base), so that a caller holding them across calls does not
+// allocate.
+func proxyNearTo(z, d, base *big.Float, dir int, p uint) *big.Float {
 	P := max(p+2, base.Prec()) + 2
 	e := base.MantExp(nil)
-	d := new(big.Float).SetMantExp(big.NewFloat(float64(dir)), e-int(P)-1)
-	return new(big.Float).SetPrec(P+2).Add(base, d)
+	d.SetInt64(int64(dir))
+	d.SetMantExp(d, e-int(P)-1)
+	return z.SetPrec(P+2).SetMode(big.ToNearestEven).Add(base, d) // exact
 }
 
 // must panics on an internal invariant that does not hold: a ball operation
@@ -54,6 +64,7 @@ func nearBound(base *big.Float, p uint) int64 {
 // it only moves an exponent.) A value whose rounded exponent is MaxExp+1
 // overflows inside z.Set, as in big.Float's own arithmetic. v is finite and
 // non-zero (zero and infinite results are special values, set directly).
+// v is the caller's to give up: it is scaled in place.
 func finish(z, v *big.Float, K int64) *big.Float {
 	e := int64(v.MantExp(nil)) + K
 	switch {
@@ -66,19 +77,20 @@ func finish(z, v *big.Float, K int64) *big.Float {
 		// up into range. Round one binade higher, then move down; the
 		// value and the underflow are big.Float's, the accuracy of such a
 		// result is reported as Exact.
-		t := scale2(v, K+1)
-		z.Set(t)
+		z.Set(scale2(v, K+1))
 		return z.SetMantExp(z, -1)
 	}
 	return z.Set(scale2(v, K))
 }
 
-// scale2 returns v·2^K exactly, at v's precision. |K| may reach 2^32: it
-// is applied in two steps so that each fits an int on 32-bit targets.
+// scale2 sets v to v·2^K exactly, at v's precision, and returns it. |K|
+// may reach 2^32: it is applied in two steps so that each fits an int on
+// 32-bit targets (the intermediate exponent lies between the first and the
+// last, both in range).
 func scale2(v *big.Float, K int64) *big.Float {
 	k1 := K / 2
-	t := new(big.Float).SetMantExp(v, int(k1))
-	return t.SetMantExp(t, int(K-k1))
+	v.SetMantExp(v, int(k1))
+	return v.SetMantExp(v, int(K-k1))
 }
 
 // overflow sets z to ±Inf the way big.Float's own arithmetic does on
@@ -121,6 +133,8 @@ func ziv(z *big.Float, inPrec uint, eval evalFn) *big.Float {
 	p := z.Prec()
 	mode := z.Mode()
 	limit := zivLimit(p, inPrec)
+	ws := zivPool.Get().(*zivWS)
+	defer zivPool.Put(ws)
 	for wp := p + 24; ; wp += wp/2 + 16 {
 		if wp > limit {
 			panic(fmt.Sprintf("bigfloat: internal error: Ziv loop did not converge (precision %d, working precision %d)", p, wp))
@@ -129,20 +143,26 @@ func ziv(z *big.Float, inPrec uint, eval evalFn) *big.Float {
 		if !ok {
 			continue
 		}
-		if v := decide(b, p, mode); v != nil {
+		if v := decide(b, p, mode, ws); v != nil {
 			return finish(z, v, K)
 		}
 	}
 }
 
+// zivWS holds the scratch values of decide, recycled through zivPool so
+// that their mantissas keep their capacity from one call to the next.
+type zivWS struct{ rad, lo, hi, d, pd, pv big.Float }
+
+var zivPool = sync.Pool{New: func() any { return new(zivWS) }}
+
 // decide returns a proxy of the correctly rounded value of every point of b,
 // or nil when the points do not all round alike or when the rounded value
-// lies inside the ball (its side is then unknown).
-func decide(b *ball, p uint, mode big.RoundingMode) *big.Float {
-	var rad big.Float
-	b.r.float(&rad)
-	lo := new(big.Float).SetPrec(p).SetMode(mode).Sub(&b.m, &rad)
-	hi := new(big.Float).SetPrec(p).SetMode(mode).Add(&b.m, &rad)
+// lies inside the ball (its side is then unknown). The proxy is ws.pv.
+func decide(b *ball, p uint, mode big.RoundingMode, ws *zivWS) *big.Float {
+	rad, lo, hi, d := &ws.rad, &ws.lo, &ws.hi, &ws.d
+	b.r.float(rad)
+	lo.SetPrec(p).SetMode(mode).Sub(&b.m, rad)
+	hi.SetPrec(p).SetMode(mode).Add(&b.m, rad)
 	if lo.Cmp(hi) != 0 || lo.Signbit() != hi.Signbit() || lo.Sign() == 0 || lo.IsInf() {
 		return nil
 	}
@@ -150,14 +170,13 @@ func decide(b *ball, p uint, mode big.RoundingMode) *big.Float {
 	// max(p, prec(m)) + |exp(lo) - exp(m)| positions, plus a carry.
 	em, el := b.m.MantExp(nil), lo.MantExp(nil)
 	ed := uint(max(em-el, el-em))
-	d := new(big.Float).SetPrec(max(p, b.m.Prec()) + ed + 4)
+	d.SetPrec(max(p, b.m.Prec()) + ed + 4).SetMode(big.ToNearestEven)
 	d.Sub(lo, &b.m)
-	var ad big.Float
-	ad.Abs(d)
-	if ad.Cmp(&rad) <= 0 {
+	sd := d.Sign()
+	if d.Abs(d).Cmp(rad) <= 0 {
 		return nil
 	}
-	return proxyNear(lo, -d.Sign(), p)
+	return proxyNearTo(&ws.pv, &ws.pd, lo, -sd, p)
 }
 
 // cmpAbs compares |a| and |b|.

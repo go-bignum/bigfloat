@@ -6,6 +6,7 @@ package bigfloat
 
 import (
 	"math/big"
+	"math/bits"
 	"sync"
 )
 
@@ -60,7 +61,7 @@ func bsBall(r bsResult, wp uint, relBits int64) *ball {
 func log2FactLower(k int64) int64 {
 	var s int64
 	for j := int64(2); j <= k; j++ {
-		s += int64(big.NewInt(j).BitLen() - 1)
+		s += int64(bits.Len64(uint64(j)) - 1)
 	}
 	return s
 }
@@ -231,6 +232,35 @@ type constCache struct {
 	prec    uint
 	b       *ball
 	compute func(uint) *ball
+	fxs     map[uint]*fx // fixed-point copies by scale, at most maxConstFx
+}
+
+// maxConstFx bounds the fixed-point copies a constCache keeps: a call at
+// a new scale beyond it starts the map afresh.
+const maxConstFx = 64
+
+// fx returns the constant as a fixed-point ball at scale w, shared: the
+// caller uses it as an operand only, never as a destination (nor calls
+// log2bnd on it, which writes scratch). The constant is below 4 in every
+// use, so 8 guard bits of the ball make its radius a fraction of an ulp.
+func (c *constCache) fx(w uint) *fx {
+	if w > tableMaxPrec {
+		return fxFromBall(c.get(w+8), w) // not kept: huge scales are rare
+	}
+	c.mu.Lock()
+	f := c.fxs[w]
+	c.mu.Unlock()
+	if f != nil {
+		return f
+	}
+	f = fxFromBall(c.get(w+8), w)
+	c.mu.Lock()
+	if c.fxs == nil || len(c.fxs) >= maxConstFx {
+		c.fxs = map[uint]*fx{}
+	}
+	c.fxs[w] = f
+	c.mu.Unlock()
+	return f
 }
 
 func (c *constCache) get(wp uint) *ball {
@@ -256,6 +286,8 @@ var (
 	eulerCache = &constCache{compute: eulerBallCompute}
 )
 
+func piFx(w uint) *fx         { return piCache.fx(w) }
+func ln2Fx(w uint) *fx        { return ln2Cache.fx(w) }
 func piBall(wp uint) *ball    { return piCache.get(wp) }
 func ln2Ball(wp uint) *ball   { return ln2Cache.get(wp) }
 func ln10Ball(wp uint) *ball  { return ln10Cache.get(wp) }

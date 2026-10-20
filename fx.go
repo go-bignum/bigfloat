@@ -28,6 +28,7 @@ type fx struct {
 	e    float64
 	w    uint
 	t, k big.Int
+	f    big.Float // conversion scratch
 }
 
 func addUp(a, b float64) float64 { return up(a + b) }
@@ -56,6 +57,19 @@ func (a *fx) log2bnd() int {
 	a.k.SetUint64(uint64(min(math.Ceil(a.e), 1<<62))) // e is finite in practice
 	a.t.Add(&a.t, &a.k)
 	return a.t.BitLen() - int(a.w)
+}
+
+// expLower returns e with |x| >= 2^(e-1) for every point of a, or false
+// when a may contain zero (as ball.expLower; exact integer arithmetic, so
+// that no scale is too large for it). It writes a's scratch.
+func (a *fx) expLower() (int64, bool) {
+	a.t.Abs(&a.v)
+	a.k.SetUint64(uint64(min(math.Ceil(a.e), 1<<62)))
+	a.t.Sub(&a.t, &a.k)
+	if a.t.Sign() <= 0 {
+		return 0, false
+	}
+	return int64(a.t.BitLen()) - int64(a.w), true
 }
 
 // lowbnd returns a lower bound on |x| for every point of a (0 if it may
@@ -176,12 +190,15 @@ func (z *fx) sqrt(a *fx) bool {
 
 // fxFromBall converts a ball to fixed point at scale w (truncation adds one
 // ulp, the radius is carried over rounded up).
-func fxFromBall(b *ball, w uint) *fx {
-	z := &fx{w: w}
-	var t big.Float
-	t.SetPrec(0)
-	t.SetMantExp(&b.m, int(w))
-	t.Int(&z.v)
+func fxFromBall(b *ball, w uint) *fx { return new(fx).setBall(b, w) }
+
+// setBall sets z to the ball b at scale w, as fxFromBall, reusing z's
+// storage.
+func (z *fx) setBall(b *ball, w uint) *fx {
+	z.w = w
+	z.f.SetPrec(0) // Set below takes m's precision instead of rounding
+	z.f.SetMantExp(&b.m, int(w))
+	z.f.Int(&z.v)
 	e := 1.0
 	if !b.r.isZero() {
 		x := b.r.e + int64(w)
@@ -198,10 +215,44 @@ func fxFromBall(b *ball, w uint) *fx {
 }
 
 // fxFromFloat converts an exact big.Float.
-func fxFromFloat(x *big.Float, w uint) *fx {
-	var b ball
-	b.setExact(x)
-	return fxFromBall(&b, w)
+func fxFromFloat(x *big.Float, w uint) *fx { return new(fx).setFloat(x, w) }
+
+// setFloat sets z to the exact finite x at scale w: truncated towards
+// zero, one ulp of error unless x fits.
+func (z *fx) setFloat(x *big.Float, w uint) *fx {
+	z.w = w
+	z.f.SetPrec(0) // Set below takes x's precision instead of rounding
+	z.f.SetMantExp(x, int(w))
+	z.e = 0
+	if _, acc := z.f.Int(&z.v); acc != big.Exact {
+		z.e = 1
+	}
+	return z
+}
+
+// mulInt sets z to a·k for an integer k, exactly: the error scales by |k|.
+func (z *fx) mulInt(a *fx, k *big.Int) *fx {
+	var f float64
+	if k.IsInt64() {
+		f = float64(k.Int64())
+	} else {
+		f, _ = new(big.Float).SetInt(k).Float64() // |k| < 2^1024 for every caller
+	}
+	e := mulUp(a.e, up(math.Abs(f)))
+	z.w = a.w
+	z.v.Mul(&a.v, k)
+	z.e = e
+	return z
+}
+
+// rescale sets z to a at the smaller scale w <= a.w (floor: one ulp).
+func (z *fx) rescale(a *fx, w uint) *fx {
+	d := a.w - w
+	e := addUp(up(math.Ldexp(a.e, -int(d))), 1)
+	z.v.Rsh(&a.v, d)
+	z.w = w
+	z.e = e
+	return z
 }
 
 // toBall converts back to a ball (exactly: the midpoint is the integer v

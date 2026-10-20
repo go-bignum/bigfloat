@@ -7,6 +7,7 @@ package bigfloat
 import (
 	"math"
 	"math/big"
+	"math/bits"
 )
 
 // expSplit returns the number s of halvings before the Taylor series of
@@ -34,25 +35,58 @@ func taylorTerms(lt int64, w uint) int64 {
 func expCore(r *fx, s uint) *fx {
 	w := r.w
 	s += uint(max(0, r.log2bnd()+1))
-	var t fx
+	ws := getFxs(1)
+	defer putFxs(ws)
+	t := &(*ws)[0]
 	t.shr(r, s)
 	n := taylorTerms(min(int64(t.log2bnd()), -1), w)
-	var y, one fx
-	y.setInt(1, w)
-	one.setInt(1, w)
-	for k := n; k >= 1; k-- {
-		y.mul(&y, &t)
-		y.divSmall(&y, uint64(k))
-		y.add(&y, &one)
-	}
+	y := expSeries(t, n)
 	y.e = addUp(y.e, 1) // truncation
 	for i := uint(0); i < s; i++ {
-		y.mul(&y, &y)
+		y.mul(y, y)
 	}
-	return &y
+	return y
 }
 
-func bitlenU(n int64) int { return big.NewInt(n).BitLen() }
+// expSeries returns Σ_{k=0}^{n} t^k/k! for a fixed-point ball t, |t| <= 1/2
+// (the tail is the caller's). As oddSeries, the terms go to m accumulators
+// by k mod m, acc_i holding them without their factor t^i: the running term
+// a = t^(k-i)/k! takes one division per term and one multiplication by t^m
+// every m terms (mpmath's exp_basecase runs two such sums, libelefun.py).
+func expSeries(t *fx, n int64) *fx {
+	w := t.w
+	m := max(2, int(math.Sqrt(float64(n))))
+	ws := getFxs(2*m + 3)
+	defer putFxs(ws)
+	buf := *ws
+	pw, acc := buf[:m+1], buf[m+1:2*m+1]
+	a, q := &buf[2*m+1], &buf[2*m+2]
+	pw[1].set(t)
+	for i := 2; i <= m; i++ {
+		pw[i].mul(&pw[i-1], t)
+	}
+	acc[0].setInt(1, w)
+	for i := 1; i < m; i++ {
+		acc[i].setInt(0, w)
+	}
+	a.setInt(1, w)
+	for k := int64(1); k <= n; k++ {
+		i := int(k % int64(m))
+		if i == 0 {
+			a.mul(a, &pw[m])
+		}
+		a.divSmall(a, uint64(k))
+		acc[i].add(&acc[i], a)
+	}
+	r := &acc[0]
+	for i := 1; i < m; i++ {
+		q.mul(&acc[i], &pw[i])
+		r.add(r, q)
+	}
+	return new(fx).set(r)
+}
+
+func bitlenU(n int64) int { return bits.Len64(uint64(n)) } // n >= 0
 
 // expReduced encloses e^x = b·2^k, for x within xr of an exact x with
 // |x| < 2^34: x = k·ln2 + r with |r| <= 0.36 (plus xr), then expCore on r.
@@ -64,18 +98,29 @@ func expReduced(x *big.Float, xr mag, wp uint) (*ball, int64) {
 	k := int64(math.Round(xf / math.Ln2))
 	s := expSplit(wp)
 	w := wp + s + 16
-	var r ball
-	r.setFloat(x, w+48)
+	// r = x - k·ln2 in fixed point at scale wk: the error of k·ln2 is |k|
+	// ulps of the cached ln2 (plus one), which the bitlen(k) + 8 extra bits
+	// bring below one ulp at scale w.
+	ws := getFxs(3)
+	defer putFxs(ws)
+	r, kl, kb := &(*ws)[0], &(*ws)[1], &(*ws)[2]
+	wk := w + uint(bitlenU(abs64(k))) + 8
+	r.setFloat(x, wk)
 	if k != 0 {
-		wk := w + uint(bitlenU(abs64(k))) + 8
-		var kb, t ball
-		kb.setInt64(k)
-		t.mul(ln2Ball(wk), &kb, wk)
-		r.sub(&r, &t, w+8)
+		kb.v.SetInt64(k)
+		kl.mulInt(ln2Fx(wk), &kb.v)
+		r.sub(r, kl)
 	}
-	r.addRad(xr)
+	r.rescale(r, w)
+	if !xr.isZero() {
+		// carry the radius of x over, in ulps rounded up (fxFromBall of
+		// the ball 0 ± xr: one ulp more than needed)
+		var rb ball
+		rb.r = xr
+		r.e = addUp(r.e, fxFromBall(&rb, w).e)
+	}
 	var b ball
-	expCore(fxFromBall(&r, w), s).toBall(&b)
+	expCore(r, s).toBall(&b)
 	return &b, k
 }
 

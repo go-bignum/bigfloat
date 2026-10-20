@@ -20,7 +20,7 @@ func trigSplit(w uint) uint { return uint(math.Sqrt(float64(w))/3) + 1 }
 // cos 2a = 1 - 2 sin² a.
 func sincosCore(r *fx, j uint) (*fx, *fx) {
 	w := r.w
-	var t fx
+	var t fx // log2bnd writes its scratch: a local, not the caller's r
 	t.shr(r, j)
 	lt := min(int64(t.log2bnd()), -1)
 	// cos tail <= |t|^(2n+2)/(2n+2)!, sin tail smaller.
@@ -28,31 +28,75 @@ func sincosCore(r *fx, j uint) (*fx, *fx) {
 	for lt*(2*n+2)-log2FactLower(2*n+2) > -int64(w)-1 {
 		n++
 	}
-	var u, one, s, c fx
-	u.mul(&t, &t)
-	one.setInt(1, w)
-	s.setInt(1, w)
-	c.setInt(1, w)
-	for k := n; k >= 1; k-- {
-		s.mul(&s, &u)
-		s.divSmall(&s, uint64(2*k*(2*k+1)))
-		s.sub(&one, &s)
-		c.mul(&c, &u)
-		c.divSmall(&c, uint64((2*k-1)*(2*k)))
-		c.sub(&one, &c)
-	}
-	s.mul(&s, &t)
+	ws := getFxs(2)
+	defer putFxs(ws)
+	one, s2 := &(*ws)[0], &(*ws)[1]
+	s, c := sinCosSeries(&t, n)
 	s.e = addUp(s.e, 1)
 	c.e = addUp(c.e, 1)
-	var s2 fx
+	one.setInt(1, w)
 	for i := uint(0); i < j; i++ {
-		s2.mul(&s, &s)
-		s.mul(&s, &c)
-		s.shl(&s, 1)
-		c.shl(&s2, 1)
-		c.sub(&one, &c)
+		s2.mul(s, s)
+		s.mul(s, c)
+		s.shl(s, 1)
+		c.shl(s2, 1)
+		c.sub(one, c)
 	}
-	return &s, &c
+	return s, c
+}
+
+// sinCosSeries returns the Taylor polynomials of sin t and cos t to the
+// terms k = n (t^(2n+1)/(2n+1)! and t^(2n)/(2n)!), tails left to the
+// caller. Both run on m accumulators of u = t² as oddSeries does, sharing
+// the powers of u: the running cos term a = u^(k-i)/(2k)! takes one
+// division, the sin term is a/(2k+1), and a advances by u^m every m terms.
+func sinCosSeries(t *fx, n int64) (*fx, *fx) {
+	w := t.w
+	m := max(2, int(math.Sqrt(float64(n)))&^1)
+	ws := getFxs(3*m + 4)
+	defer putFxs(ws)
+	buf := *ws
+	pw, ac, as := buf[:m+1], buf[m+1:2*m+1], buf[2*m+1:3*m+1]
+	a, b, q := &buf[3*m+1], &buf[3*m+2], &buf[3*m+3]
+	pw[1].mul(t, t)
+	for i := 2; i <= m; i++ {
+		pw[i].mul(&pw[i-1], &pw[1])
+	}
+	ac[0].setInt(1, w)
+	as[0].setInt(1, w)
+	for i := 1; i < m; i++ {
+		ac[i].setInt(0, w)
+		as[i].setInt(0, w)
+	}
+	a.setInt(1, w)
+	for k := int64(1); k <= n; k++ {
+		i := int(k % int64(m))
+		if i == 0 {
+			a.mul(a, &pw[m])
+		}
+		a.divSmall(a, uint64((2*k-1)*(2*k)))
+		ac[i].add(&ac[i], a)
+		b.divSmall(a, uint64(2*k+1))
+		as[i].add(&as[i], b)
+	}
+	c, s := &ac[0], &as[0]
+	for i := 1; i < m; i++ {
+		// m even: the sign of term jm+i is (-1)^i
+		q.mul(&ac[i], &pw[i])
+		if i%2 == 1 {
+			c.sub(c, q)
+		} else {
+			c.add(c, q)
+		}
+		q.mul(&as[i], &pw[i])
+		if i%2 == 1 {
+			s.sub(s, q)
+		} else {
+			s.add(s, q)
+		}
+	}
+	S := new(fx).mul(s, t)
+	return S, new(fx).set(c)
 }
 
 var quarterPi = big.NewFloat(0.78)
@@ -80,33 +124,43 @@ func (e ErrLimit) Error() string { return e.Msg }
 // for any argument (MPFR's mpfr_sin does the same); the first call at a
 // huge exponent pays for computing those bits of π, later ones reuse the
 // cache.
-func reduceHalfPi(x *big.Float, w uint) (*ball, int) {
-	r := new(ball)
+//
+// r is a fixed-point ball at scale w, within two ulps: the reduction runs
+// at scale W = w + bitlen(k) + 9, where the |k| ulps of error of k·π/2 are
+// below one ulp of 2^-w.
+func reduceHalfPi(x *big.Float, w uint) (*fx, int) {
+	r := new(fx)
 	var ax big.Float
 	if ax.Abs(x).Cmp(quarterPi) <= 0 {
-		r.setExact(x)
-		return r, 0
+		return r.setFloat(x, w), 0
 	}
 	if e := x.MantExp(nil); e > MaxReductionExponent {
 		panic(ErrLimit{Msg: fmt.Sprintf("bigfloat: argument 2^%d beyond MaxReductionExponent (2^%d): reducing it needs that many bits of π", e, MaxReductionExponent)})
 	}
 	ex := uint(max(x.MantExp(nil), 0))
-	// k = round(x / (π/2)) from a rough π: error far below 1/2.
-	pr := piBall(ex + 64)
-	var hp, kf big.Float
-	hp.SetPrec(ex+64).SetMantExp(&pr.m, -1)
-	kf.SetPrec(ex+64).Quo(x, &hp)
-	kint := roundInt(&kf)
-	q := int(new(big.Int).And(kint, big.NewInt(3)).Int64())
-	wp := ex + w + 16
-	pb := piBall(wp)
-	var kb, t, xb ball
-	kb.m.SetPrec(0).SetInt(kint)
-	pb.mul2exp(pb, -1)
-	t.mul(pb, &kb, wp)
-	xb.setExact(x)
-	r.sub(&xb, &t, w+16)
-	return r, q
+	var kint *big.Int
+	if ex <= 40 {
+		// float64 quotient: absolute error below 2^-11, far below 1/2
+		xf, _ := x.Float64()
+		kint = big.NewInt(int64(math.Round(xf / (math.Pi / 2))))
+	} else {
+		// k = round(x / (π/2)) from a rough π: error far below 1/2.
+		pr := piBall(ex + 64)
+		var hp, kf big.Float
+		hp.SetPrec(ex+64).SetMantExp(&pr.m, -1)
+		kf.SetPrec(ex+64).Quo(x, &hp)
+		kint = roundInt(&kf)
+	}
+	var q4 big.Int
+	q := int(q4.And(kint, big.NewInt(3)).Int64())
+	W := w + uint(kint.BitLen()) + 8
+	// the integer of π at scale W is π/2 at scale W+1
+	var kl fx
+	kl.mulInt(piFx(W), kint)
+	kl.w = W + 1
+	r.setFloat(x, W+1)
+	r.sub(r, &kl)
+	return r.rescale(r, w), q
 }
 
 // roundInt rounds x to an integer near it (ties away; any rounding will
@@ -132,7 +186,7 @@ func sincosBall(x *big.Float, wp uint) (*ball, *ball, bool) {
 	j := trigSplit(wp)
 	base := wp + 2*j + 20
 	w := base
-	var r *ball
+	var r *fx
 	var q int
 	for {
 		r, q = reduceHalfPi(x, w+8)
@@ -146,7 +200,7 @@ func sincosBall(x *big.Float, wp uint) (*ball, *ball, bool) {
 		}
 		w = need
 	}
-	s, c := sincosCore(fxFromBall(r, w), j)
+	s, c := sincosCore(r.rescale(r, w), j)
 	var sb, cb ball
 	s.toBall(&sb)
 	c.toBall(&cb)

@@ -4,7 +4,10 @@
 
 package bigfloat
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 // oddSeries returns Σ_{k=0}^{n} s_k·y^(2k+1)/(2k+1) for a fixed-point ball
 // y, with s_k = (-1)^k when alt (the atan series) and 1 otherwise (atanh).
@@ -24,11 +27,13 @@ import "math"
 func oddSeries(y *fx, n int64, alt bool) *fx {
 	w := y.w
 	m := max(2, int(math.Sqrt(float64(n+1)))&^1)
-	// pw[0..m] = u^0..u^m, acc[0..m-1], then P and q.
-	buf := make([]fx, 2*m+3)
+	// pw[1..m] = u^1..u^m, acc[0..m-1], then P and q, from a pooled
+	// workspace whose integers keep their capacity between calls.
+	ws := getFxs(2*m + 3)
+	defer putFxs(ws)
+	buf := *ws
 	pw, acc := buf[:m+1], buf[m+1:2*m+1]
 	P, q := &buf[2*m+1], &buf[2*m+2]
-	pw[0].setInt(1, w)
 	pw[1].mul(y, y)
 	for i := 2; i <= m; i++ {
 		pw[i].mul(&pw[i-1], &pw[1])
@@ -55,5 +60,22 @@ func oddSeries(y *fx, n int64, alt bool) *fx {
 			r.add(r, q)
 		}
 	}
-	return r
+	return new(fx).set(r)
 }
+
+// fxPool recycles fixed-point workspaces (slices of fx whose integers have
+// grown to the size of a series' operands), so that a series costs no
+// allocation once the pool is warm.
+var fxPool sync.Pool
+
+// getFxs returns a workspace of at least n fixed-point values.
+func getFxs(n int) *[]fx {
+	if p, _ := fxPool.Get().(*[]fx); p != nil && cap(*p) >= n {
+		*p = (*p)[:n]
+		return p
+	}
+	s := make([]fx, n)
+	return &s
+}
+
+func putFxs(p *[]fx) { fxPool.Put(p) }
