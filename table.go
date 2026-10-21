@@ -33,9 +33,10 @@ type fxTable struct {
 	compute func(n int64, W uint) *fx
 }
 
-// maxScaled bounds the truncated copies an fxTable keeps; a new one beyond
-// it starts that map afresh (the class entries stay). A variable for tests.
-var maxScaled = 1 << 12
+// maxScaled bounds the truncated copies an fxTable keeps (at most 1024
+// entries of at most tableMaxPrec bits: 1 MiB); a new one beyond it starts
+// that map afresh (the class entries stay). A variable for tests.
+var maxScaled = 1 << 10
 
 // get returns f(n) at scale w <= tableMaxPrec: the class entry truncated to
 // w bits (one more ulp of error). The value is shared: an operand only,
