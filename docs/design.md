@@ -175,7 +175,10 @@ arguments' own size. The fuzz test found two unbounded paths, both fixed:
 check built x^98304 as a five-megabit rational. It later found a defect of
 the fixed-point reduction: the error of k·π/2 went through float64(k),
 +Inf for |k| >= 2^1024 (Tan(1.5·2^1130) panicked on an internal invariant);
-that error is now bounded after rescaling, never formed in float64.
+that error is now bounded after rescaling, never formed in float64. The
+hostile-point test found that Expm1(2^34 − 1) did not converge on 32-bit
+targets (2^-k built with int(−k), which wraps for k >= 2^31); 2^-k is now a
+radius once it is below the working precision.
 
 ## Verification
 
