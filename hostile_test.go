@@ -66,7 +66,7 @@ var hostileCases = func() []hostileCase {
 			}
 		}
 	}
-	for _, x := range []string{"0x1p-8", "0x1p100", "0x1.8p1000", "1e22", "-1e22", "0x1p-500"} {
+	for _, x := range []string{"0.782", "-0.782", "0x1p-8", "0x1p100", "0x1.8p1000", "1e22", "-1e22", "0x1p-500"} {
 		for _, fn := range []string{"sin", "cos", "tan"} {
 			add(fn, x)
 		}
@@ -104,8 +104,9 @@ var hostileCases = func() []hostileCase {
 	return cs
 }()
 
-// hostilePrecs straddle the table limits (sin/cos tables up to 640 bits).
-var hostilePrecs = []uint{2, 24, 53, 113, 200, 640, 641, 1000, 2100}
+// hostilePrecs straddle the table limits (sin/cos tables up to scale 640:
+// working precision p+24, scale p+44, so p = 596 is the last table one).
+var hostilePrecs = []uint{2, 24, 53, 113, 200, 590, 596, 597, 640, 1000, 2100}
 
 // parseArg evaluates a sum of terms "a" or "a/b" (b a power of two), such
 // as "362/512-1+0x1p-60", exactly.

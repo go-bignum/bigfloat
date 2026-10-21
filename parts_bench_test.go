@@ -14,12 +14,13 @@ import (
 func BenchmarkParts(b *testing.B) {
 	x := big.NewFloat(0.7)
 	const wp = 77
+	r, kl := new(fx), new(fx)
 	b.Run("reduce", func(b *testing.B) {
 		for b.Loop() {
-			reduceHalfPi(x, 111)
+			reduceHalfPi(r, kl, x, 111)
 		}
 	})
-	r, _ := reduceHalfPi(x, 103)
+	reduceHalfPi(r, kl, x, 103)
 	s, c := new(fx), new(fx)
 	b.Run("sincosFx", func(b *testing.B) {
 		for b.Loop() {
@@ -40,7 +41,7 @@ func BenchmarkParts(b *testing.B) {
 	})
 	b.Run("sincosBall", func(b *testing.B) {
 		for b.Loop() {
-			sincosBall(x, wp)
+			sincosBall(x, wp, 0)
 		}
 	})
 	ws := new(zivWS)

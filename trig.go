@@ -195,98 +195,111 @@ func (e ErrLimit) Error() string { return e.Msg }
 //
 // r is a fixed-point ball at scale w, within two ulps: the reduction runs
 // at scale W = w + bitlen(k) + 9, where the |k| ulps of error of k·π/2 are
-// below one ulp of 2^-w.
-func reduceHalfPi(x *big.Float, w uint) (*fx, int) {
-	r := new(fx)
-	var ax big.Float
-	if ax.Abs(x).Cmp(quarterPi) <= 0 {
-		return r.setFloat(x, w), 0
+// below one ulp of 2^-w. r and kl (scratch) are the caller's.
+func reduceHalfPi(r, kl *fx, x *big.Float, w uint) int {
+	e := x.MantExp(nil)
+	xf, _ := x.Float64() // ±Inf beyond float64's range: only used when e <= 40
+	if e <= 0 && math.Abs(xf) <= 0.78 {
+		// |x| <= 0.78·(1 + 2^-53) < π/4
+		r.setFloat(x, w)
+		return 0
 	}
-	if e := x.MantExp(nil); e > MaxReductionExponent {
+	if e > MaxReductionExponent {
 		panic(ErrLimit{Msg: fmt.Sprintf("bigfloat: argument 2^%d beyond MaxReductionExponent (2^%d): reducing it needs that many bits of π", e, MaxReductionExponent)})
 	}
-	ex := uint(max(x.MantExp(nil), 0))
-	var kint *big.Int
+	ex := uint(max(e, 0))
+	kint := &kl.k
 	if ex <= 40 {
 		// float64 quotient: absolute error below 2^-11, far below 1/2
-		xf, _ := x.Float64()
-		kint = big.NewInt(int64(math.Round(xf / (math.Pi / 2))))
+		kint.SetInt64(int64(math.Round(xf / (math.Pi / 2))))
 	} else {
-		// k = round(x / (π/2)) from a rough π: error far below 1/2.
-		pr := piBall(ex + 64)
-		var hp, kf big.Float
-		hp.SetPrec(ex+64).SetMantExp(&pr.m, -1)
-		kf.SetPrec(ex+64).Quo(x, &hp)
-		kint = roundInt(&kf)
+		// k = round(x/(π/2)) = floor((2X + P)/(2P)) with P = π·2^V ± e
+		// (V = ex + 64; e of a few units) and X = x·2^(V+1) (truncated when
+		// x has bits below 2^-(V+1), possible only for a long x): the
+		// quotient is off by at most about |k|·2^-(V-2) + 2^-V < 1/4 of x/(π/2),
+		// far below the 1/2 that would move |r| past π/4 + ε.
+		V := ex + 64
+		pf := piFx(V)
+		kl.setFloat(x, V+1) // X in kl.v
+		kl.v.Lsh(&kl.v, 1)
+		kl.v.Add(&kl.v, &pf.v)
+		kl.t.Lsh(&pf.v, 1)
+		kint.Div(&kl.v, &kl.t) // Euclidean: floor for the positive divisor
 	}
-	var q4 big.Int
-	q := int(q4.And(kint, big.NewInt(3)).Int64())
+	// k mod 4 from the low bits of |k| (big.Int keeps sign and magnitude)
+	q := 0
+	if kint.Sign() != 0 { // k = 0 for 0.78 < |x| < π/4
+		q = int(kint.Bits()[0] & 3)
+	}
+	if kint.Sign() < 0 {
+		q = (4 - q) & 3
+	}
 	W := w + uint(kint.BitLen()) + 8
 	// the integer of π at scale W is π/2 at scale W+1
-	var kl fx
 	kl.mulInt(piFx(W), kint)
 	kl.w = W + 1
 	r.setFloat(x, W+1)
-	r.sub(r, &kl)
-	return r.rescale(r, w), q
+	r.sub(r, kl)
+	r.rescale(r, w)
+	return q
 }
 
-// roundInt rounds x to an integer near it (ties away; any rounding will
-// do for a reduction quotient).
-func roundInt(x *big.Float) *big.Int {
-	var h big.Float
-	h.SetPrec(x.Prec() + 2)
-	if x.Sign() >= 0 {
-		h.Add(x, big.NewFloat(0.5))
-	} else {
-		h.Sub(x, big.NewFloat(0.5))
-	}
-	n, _ := h.Int(nil)
-	return n
-}
 
 // sincosBall returns balls for sin x and cos x (exact x), each with about
 // wp bits of relative accuracy. The reduced argument r needs as many more
 // bits of absolute accuracy as it has leading zeros; ok = false when the
 // reduction at this precision cannot even separate r from zero (x within
 // 2^-wp of a multiple of π/2), so that the Ziv loop raises the precision.
-func sincosBall(x *big.Float, wp uint) (*ball, *ball, bool) {
+// want selects the balls built: 0 sin only, 1 cos only, 2 both (the other
+// is nil).
+func sincosBall(x *big.Float, wp uint, want int) (*ball, *ball, bool) {
 	j := trigSplit(wp)
-	base := wp + 2*j + 20
+	// The table path of sincosFx (scales up to sinCosTableMax) needs no
+	// guard bits for doublings; sincosCore's j doublings lose about 2j bits.
+	base := wp + 20
 	w := base
-	var r *fx
+	ws := getFxs(4)
+	defer putFxs(ws)
+	r, s, c := &(*ws)[0], &(*ws)[1], &(*ws)[2]
 	var q int
 	for {
-		r, q = reduceHalfPi(x, w+8)
+		q = reduceHalfPi(r, &(*ws)[3], x, w+8)
 		er, ok := r.expLower()
 		if !ok {
 			return nil, nil, false
 		}
 		need := base + uint(max(0, -er))
+		if need > sinCosTableMax && base == wp+20 {
+			base += 2 * j
+			need += 2 * j
+		}
 		if need <= w {
 			break
 		}
 		w = need
 	}
-	ws := getFxs(2)
-	defer putFxs(ws)
-	s, c := &(*ws)[0], &(*ws)[1]
 	sincosFx(s, c, r.rescale(r, w), j)
-	var sb, cb ball
-	s.toBall(&sb)
-	c.toBall(&cb)
-	switch q {
-	case 1:
-		sb, cb = cb, sb
-		cb.neg(&cb)
-	case 2:
-		sb.neg(&sb)
-		cb.neg(&cb)
-	case 3:
-		sb, cb = cb, sb
-		sb.neg(&sb)
+	// x = qπ/2 + r: sin x, cos x = (sin r, cos r), (cos r, -sin r),
+	// (-sin r, -cos r), (-cos r, sin r) for q = 0 … 3
+	sf, cf := s, c
+	sneg, cneg := q == 2 || q == 3, q == 1 || q == 2
+	if q%2 == 1 {
+		sf, cf = c, s
 	}
-	return &sb, &cb, true
+	var sb, cb *ball
+	if want != 1 {
+		sb = sf.toBall(new(ball))
+		if sneg {
+			sb.neg(sb)
+		}
+	}
+	if want != 0 {
+		cb = cf.toBall(new(ball))
+		if cneg {
+			cb.neg(cb)
+		}
+	}
+	return sb, cb, true
 }
 
 // Sin sets z to the correctly rounded sin x and returns z. Sin(±0) = ±0;
@@ -329,7 +342,7 @@ func trig(z, x *big.Float, which int) *big.Float {
 	}
 	x = new(big.Float).Set(x)
 	return ziv(z, x.Prec(), func(wp uint) (*ball, int64, bool) {
-		s, c, ok := sincosBall(x, wp)
+		s, c, ok := sincosBall(x, wp, which)
 		switch {
 		case !ok:
 			return nil, 0, false
