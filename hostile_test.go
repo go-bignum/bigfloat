@@ -66,7 +66,7 @@ var hostileCases = func() []hostileCase {
 			}
 		}
 	}
-	for _, x := range []string{"0.782", "-0.782", "0x1p-8", "0x1p100", "0x1.8p1000", "1e22", "-1e22", "0x1p-500"} {
+	for _, x := range []string{"0.782", "-0.782", "0x1p-8", "0x1p100", "0x1.8p1000", "0x1.8p1130", "-0x1.5p20000", "1e22", "-1e22", "0x1p-500"} {
 		for _, fn := range []string{"sin", "cos", "tan"} {
 			add(fn, x)
 		}

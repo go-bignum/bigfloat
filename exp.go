@@ -102,14 +102,13 @@ func expReduced(x *big.Float, xr mag, wp uint) (*ball, int64) {
 	// r = x - k·ln2 in fixed point at scale wk: the error of k·ln2 is |k|
 	// ulps of the cached ln2 (plus one), which the bitlen(k) + 8 extra bits
 	// bring below one ulp at scale w.
-	ws := getFxs(3)
+	ws := getFxs(2)
 	defer putFxs(ws)
-	r, kl, kb := &(*ws)[0], &(*ws)[1], &(*ws)[2]
+	r, kl := &(*ws)[0], &(*ws)[1]
 	wk := w + uint(bitlenU(abs64(k))) + 8
 	r.setFloat(x, wk)
 	if k != 0 {
-		kb.v.SetInt64(k)
-		kl.mulInt(ln2Fx(wk), &kb.v)
+		kl.mulInt(ln2Fx(wk), k)
 		r.sub(r, kl)
 	}
 	r.rescale(r, w)

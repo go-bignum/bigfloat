@@ -146,8 +146,7 @@ func logBall(z *ball, x *big.Float, wp uint) {
 		ee := int64(e)
 		w2 := w + uint(bitlenU(abs64(ee))) + 4
 		logReduced(lm, m, w2)
-		kl.v.SetInt64(ee)
-		kl.mulInt(ln2Fx(w2), &kl.v)
+		kl.mulInt(ln2Fx(w2), ee)
 		lm.add(lm, kl)
 	} else {
 		logReduced(lm, m, w)

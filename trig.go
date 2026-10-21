@@ -235,15 +235,19 @@ func reduceHalfPi(r, kl *fx, x *big.Float, w uint) int {
 		q = (4 - q) & 3
 	}
 	W := w + uint(kint.BitLen()) + 8
-	// the integer of π at scale W is π/2 at scale W+1
-	kl.mulInt(piFx(W), kint)
-	kl.w = W + 1
+	// The integer of π at scale W is π/2 at scale W+1. k·π/2 is formed
+	// exactly from it; its error, |k|·e_π < 2^bitlen(k)·e_π ulps at scale
+	// W+1, is added after the rescaling to w, where it is below e_π/2^9
+	// (|k| may exceed float64's range: |k|·e_π itself is not formed).
+	pf := piFx(W)
+	kl.v.Mul(&pf.v, kint)
+	kl.w, kl.e = W+1, 0
 	r.setFloat(x, W+1)
 	r.sub(r, kl)
 	r.rescale(r, w)
+	r.e = addUp(r.e, up(pf.e/512))
 	return q
 }
-
 
 // sincosBall returns balls for sin x and cos x (exact x), each with about
 // wp bits of relative accuracy. The reduced argument r needs as many more

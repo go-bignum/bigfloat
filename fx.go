@@ -258,17 +258,13 @@ func (z *fx) setFloat(x *big.Float, w uint) *fx {
 	return z
 }
 
-// mulInt sets z to a·k for an integer k, exactly: the error scales by |k|.
-func (z *fx) mulInt(a *fx, k *big.Int) *fx {
-	var f float64
-	if k.IsInt64() {
-		f = float64(k.Int64())
-	} else {
-		f, _ = new(big.Float).SetInt(k).Float64() // |k| < 2^1024 for every caller
-	}
-	e := mulUp(a.e, up(math.Abs(f)))
+// mulInt sets z to a·k for an integer k, exactly: the error scales by |k|
+// (float64(k) is within half an ulp, up covers it).
+func (z *fx) mulInt(a *fx, k int64) *fx {
+	e := mulUp(a.e, up(math.Abs(float64(k))))
 	z.w = a.w
-	z.v.Mul(&a.v, k)
+	z.k.SetInt64(k)
+	z.v.Mul(&a.v, &z.k)
 	z.e = e
 	return z
 }
