@@ -89,8 +89,8 @@ See [docs/perf.md](docs/perf.md): bigfloat against mpmath 1.4.1 at the same
 precision, one thread, interleaved rounds (`go run ./cmd/bench`). Every
 function is as fast as mpmath or faster at 53 to 1000 bits — while
 returning correctly rounded results with a certified `Acc()`, which mpmath
-does not — typically 0.6–0.9× mpmath's time at 53–200 bits and 0.3–0.6× at
-1000 bits. The fast paths follow mpmath's own choices (cached tables of
+does not — from 0.18× to 0.97× mpmath's time at 53–200 bits (the closest:
+cos, tanh and asinh at 53–113 bits) and 0.27–0.92× at 1000 bits. The fast paths follow mpmath's own choices (cached tables of
 log, atan, sin and cos at grid points; m-sum Taylor series; precision
 doubling for roots) inside the same rigorous fixed-point error model.
 
