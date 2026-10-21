@@ -96,6 +96,11 @@ res, _ := r.Round("atan2", 53, y, x) // one correctly rounded result per mode
 `oracle.Fixture` / `Case` store and check results; see
 [docs/design.md](docs/design.md#the-oracle-for-the-fleet).
 
+## Documentation
+
+- **Documentation:** <https://go-bignum.github.io/docs/>
+- **Landing:** <https://go-bignum.github.io/>
+
 ## Licence
 
 BSD 3-Clause, like the rest of the go-* fleet. mpmath (BSD-3) is used as an
