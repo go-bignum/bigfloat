@@ -227,6 +227,12 @@ func Expm1(z, x *big.Float) *big.Float {
 		if ex >= 0 {
 			// |x| >= 1/2: e^x - 1 = 2^k(b - 2^-k), |e^x - 1| > 0.39.
 			b, k := expReduced(x, mag{}, wp+4)
+			if k > int64(wp)+64 {
+				// 2^-k is far below the rounding of b (b >= 1/2): a radius.
+				// (int(-k) would also wrap on 32-bit targets for k >= 2^31.)
+				b.addRad(magPow2(-k))
+				return b, k, true
+			}
 			var c ball
 			c.m.SetMantExp(big.NewFloat(1), int(-k))
 			b.sub(b, &c, wp+4)
