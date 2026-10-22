@@ -7,6 +7,7 @@ package bigfloat
 import (
 	"math"
 	"math/big"
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
@@ -169,19 +170,87 @@ func TestMagEdges(t *testing.T) {
 	}
 }
 
-// TestRootStart: iroot recovers from a starting point below the root.
+// TestRootStart: iroot converges from a start far above the root (Newton's
+// slow linear regime) and from the root itself (the first step does not
+// decrease: the loop's other exit).
 func TestRootStart(t *testing.T) {
 	saved := rootStart
 	defer func() { rootStart = saved }()
-	rootStart = func(*big.Int, uint) *big.Int { return big.NewInt(1) }
 	N := new(big.Int).Exp(big.NewInt(12345), big.NewInt(7), nil)
-	if r, exact := iroot(N, 7); !exact || r.Int64() != 12345 {
-		t.Errorf("iroot(12345^7, 7) = %v, %v", r, exact)
+	for _, start := range []int64{1 << 40, 12345} {
+		rootStart = func(*big.Int, uint) *big.Int { return big.NewInt(start) }
+		if r, exact := iroot(N, 7); !exact || r.Int64() != 12345 {
+			t.Errorf("start %d: iroot(12345^7, 7) = %v, %v", start, r, exact)
+		}
 	}
 	rootStart = saved
 	N.Add(N, big.NewInt(1))
 	if r, exact := iroot(N, 7); exact || r.Int64() != 12345 {
 		t.Errorf("iroot(12345^7+1, 7) = %v, %v", r, exact)
+	}
+}
+
+// TestIrootDefinition checks floor roots against their definition,
+// r^n <= N < (r+1)^n, for roots of 1 to 3000 bits (rootAbove's recursion
+// and its float64 base case), on perfect powers, their neighbours and
+// pseudo-random integers.
+func TestIrootDefinition(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	check := func(N *big.Int, n uint) {
+		t.Helper()
+		r, exact := iroot(N, n)
+		var lo, hi big.Int
+		lo.Exp(r, big.NewInt(int64(n)), nil)
+		r1 := new(big.Int).Add(r, big.NewInt(1))
+		hi.Exp(r1, big.NewInt(int64(n)), nil)
+		if lo.Cmp(N) > 0 || hi.Cmp(N) <= 0 || exact != (lo.Cmp(N) == 0) {
+			t.Fatalf("iroot(%v, %d) = %v, %v", N, n, r, exact)
+		}
+	}
+	for _, n := range []uint{2, 3, 5, 7, 31} {
+		for _, bitsRoot := range []int{1, 20, 63, 64, 65, 130, 1000, 3000} {
+			for i := 0; i < 4; i++ {
+				b := make([]byte, (bitsRoot+7)/8)
+				for j := range b {
+					b[j] = byte(rng.Uint32())
+				}
+				r := new(big.Int).SetBytes(b)
+				r.SetBit(r, 0, 1)
+				P := new(big.Int).Exp(r, big.NewInt(int64(n)), nil)
+				check(P, n)
+				check(new(big.Int).Add(P, big.NewInt(1)), n)
+				Pm := new(big.Int).Sub(P, big.NewInt(1))
+				if Pm.Sign() > 0 {
+					check(Pm, n)
+				}
+			}
+		}
+	}
+}
+
+// TestIsqrt checks the fixed-point square root's integer kernel against
+// big.Int.Sqrt, around perfect squares and on random sizes.
+func TestIsqrt(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	var z, s, r big.Int
+	for _, nb := range []int{1, 8, 61, 62, 63, 64, 65, 127, 128, 500, 4000} {
+		for i := 0; i < 8; i++ {
+			b := make([]byte, (nb+7)/8)
+			for j := range b {
+				b[j] = byte(rng.Uint32())
+			}
+			x := new(big.Int).SetBytes(b)
+			x.SetBit(x, 0, 1)
+			for _, N := range []*big.Int{x, new(big.Int).Mul(x, x), new(big.Int).Sub(new(big.Int).Mul(x, x), big.NewInt(1))} {
+				if N.Sign() <= 0 {
+					continue
+				}
+				isqrt(&z, new(big.Int).Set(N), &s, &r)
+				if want := new(big.Int).Sqrt(N); z.Cmp(want) != 0 {
+					t.Fatalf("isqrt(%v) = %v, want %v", N, &z, want)
+				}
+			}
+		}
 	}
 }
 

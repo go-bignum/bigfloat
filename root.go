@@ -34,41 +34,64 @@ func iroot(N *big.Int, n uint) (*big.Int, bool) {
 		return r, s.Mul(r, r).Cmp(N) == 0
 	}
 	// Newton from above: x <- ((n-1)x + N/x^(n-1)) / n decreases
-	// monotonically to floor(N^(1/n)) from any starting x >= the root.
-	// From a power of two the first steps only shrink x by (n-1)/n each,
-	// hundreds of steps for large n; a float64 estimate widened by 2^-20
-	// (its error is near 2^-43) starts in the quadratic regime instead.
+	// monotonically to floor(N^(1/n)) from any starting x >= the root, and
+	// never goes below it. From a power of two the first steps only shrink
+	// x by (n-1)/n each, hundreds of steps for large n; rootStart starts
+	// within half the root's bits instead (precision doubling, as mpmath's
+	// nthroot_fixed, libelefun.py), so that one step reaches the root. Once
+	// a step has decreased x, x^n <= N proves x = floor(root): one power
+	// instead of the further Newton step that would confirm it.
 	x := rootStart(N, n)
 	nn := big.NewInt(int64(n))
 	n1 := big.NewInt(int64(n - 1))
-	var t, y big.Int
-	for t.Exp(x, nn, nil).Cmp(N) < 0 {
-		x.Lsh(x, 1) // not taken with rootGuess's margin
-	}
+	var t, y, r big.Int
 	for {
 		t.Exp(x, n1, nil)
-		y.Quo(N, &t)
+		y.QuoRem(N, &t, &r)
 		t.Mul(x, n1)
 		y.Add(&y, &t)
-		y.Quo(&y, nn)
+		y.QuoRem(&y, nn, &r)
 		if y.Cmp(x) >= 0 {
 			break
 		}
 		x.Set(&y)
+		if t.Exp(x, nn, nil).Cmp(N) <= 0 {
+			return x, t.Cmp(N) == 0
+		}
 	}
 	t.Exp(x, nn, nil)
 	return x, t.Cmp(N) == 0
 }
 
-// rootStart is rootGuess, replaceable by tests.
-var rootStart = rootGuess
+// rootStart returns an integer at or above N^(1/n) (n >= 3); a variable
+// for tests. (Set in init: rootAbove calls iroot, which reads it.)
+var rootStart func(N *big.Int, n uint) *big.Int
+
+func init() { rootStart = rootAbove }
+
+// rootAbove returns an integer above N^(1/n) within a relative 2^-(b/2)
+// for a root of b bits: rootGuess for roots of up to 64 bits, else
+// (floor((N >> ns)^(1/n)) + 1)·2^s with s half the root's bits, the exact
+// root of the top part from iroot (recursively: the precision doubles from
+// one level to the next). N < ((N >> ns) + 1)·2^(ns) gives
+// root(N) < root((N >> ns) + 1)·2^s <= (floor(root(N >> ns)) + 1)·2^s.
+func rootAbove(N *big.Int, n uint) *big.Int {
+	b := (N.BitLen() + int(n) - 1) / int(n)
+	if b <= 64 {
+		return rootGuess(N, n)
+	}
+	s := uint(b / 2)
+	top := new(big.Int).Rsh(N, n*s)
+	r, _ := iroot(top, n)
+	r.Add(r, big.NewInt(1))
+	return r.Lsh(r, s)
+}
 
 // rootGuess returns an integer above N^(1/n) (N > 0, n >= 3), within a
 // relative 2^-19 of it: log2 N from the top 64 bits, divided by n, read
 // back as 53 bits and a shift, then raised by 2^-20 and 1. The float64
 // error of log2 N / n is below 2^-40 relative to the root even for N of
-// 2^40 bits, well inside the margin. iroot checks the guess anyway (Newton
-// from below would stop at once).
+// 2^40 bits, well inside the margin (Newton from below would stop at once).
 func rootGuess(N *big.Int, n uint) *big.Int {
 	L := N.BitLen()
 	s := max(L-64, 0)

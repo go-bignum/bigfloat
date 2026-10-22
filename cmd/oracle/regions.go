@@ -152,6 +152,24 @@ func nearHalfPiMultiple(r *rand.Rand, p uint, kmax int64) *big.Float {
 
 func intF(p uint, v int64) *big.Float { return new(big.Float).SetPrec(p).SetInt64(v) }
 
+// grid: c + d with c = n/2^shift - off, n uniform in [lo, hi], and
+// |d| in [2^-(p+4), 2^-(shift+2)] on either side, negated half the time
+// when signed: the grid points of the table reductions (log at 2^-9, atan
+// at 2^-7, sin/cos at 2^-8), where the remainder series argument is nearly
+// 0 or nearly a full step, and the boundaries between the tables and the
+// direct series.
+func grid(shift int, lo, hi int64, off float64, signed bool) region {
+	return region{"grid", one(func(r *rand.Rand, p uint) *big.Float {
+		n := lo + r.Int64N(hi-lo+1)
+		c := float64(n)/float64(int64(1)<<shift) - off
+		x := near(r, p, c, -int(p)-4, -shift-2, 0)
+		if signed && r.IntN(2) == 0 {
+			x.Neg(x)
+		}
+		return x
+	})}
+}
+
 // regionsOf returns the argument regions of a function: tiny and small
 // arguments, the bulk of the domain, huge arguments, the neighbourhood of
 // singularities and special points, and the exact cases.
@@ -164,7 +182,7 @@ func regionsOf(fn string) []region {
 	case "expm1":
 		return []region{tiny(0), small(0), uniform("moderate", -40, 40), uniform("negative", -1e4, -40), uniform("large", 40, 1e5), zero}
 	case "log", "log2", "log10":
-		rs := []region{nearC("near1", 1, 0), uniform("moderate", 0, 100), wide("wide", -100000, 100000, 1), oneR}
+		rs := []region{nearC("near1", 1, 0), uniform("moderate", 0, 100), wide("wide", -100000, 100000, 1), oneR, grid(9, 362, 724, 0, false)}
 		switch fn {
 		case "log2":
 			rs = append(rs, region{"exact", one(pow2)})
@@ -173,7 +191,8 @@ func regionsOf(fn string) []region {
 		}
 		return rs
 	case "log1p":
-		return []region{tiny(0), small(0), nearC("near-1", -1, 1), uniform("moderate", 0, 1000), wide("wide", 1, 100000, 1), zero}
+		return []region{tiny(0), small(0), nearC("near-1", -1, 1), uniform("moderate", 0, 1000), wide("wide", 1, 100000, 1), zero,
+			grid(9, 362, 724, 1, false)} // 1+x on the log grid (x >= -0.3)
 	case "sqrt", "cbrt":
 		n, sign := 2, 1
 		if fn == "cbrt" {
@@ -260,11 +279,20 @@ func regionsOf(fn string) []region {
 		}
 	case "sin", "cos", "tan":
 		return []region{tiny(0), small(0), uniform("moderate", -100, 100), wide("large", 7, 60, 0), wide("huge", 60, 1000, 0),
-			{"near-kpi/2", one(func(r *rand.Rand, p uint) *big.Float { return nearHalfPiMultiple(r, p, 1<<20) })}, zero}
+			{"near-kpi/2", one(func(r *rand.Rand, p uint) *big.Float { return nearHalfPiMultiple(r, p, 1<<20) })}, zero,
+			grid(8, 1, 202, 0, true)}
 	case "asin", "acos":
-		return []region{tiny(0), uniform("moderate", -1, 1), nearPM1(), zero}
+		// 0.86: the bound of the fixed-point path
+		limit := region{"limit", one(func(r *rand.Rand, p uint) *big.Float {
+			x := near(r, p, 0.86, -int(p)-4, -6, 0) // within 2^-6: inside [-1, 1]
+			if r.IntN(2) == 0 {
+				x.Neg(x)
+			}
+			return x
+		})}
+		return []region{tiny(0), uniform("moderate", -1, 1), nearPM1(), zero, limit}
 	case "atan":
-		return []region{tiny(0), uniform("moderate", -10, 10), wide("wide", 0, 100000, 0), zero}
+		return []region{tiny(0), uniform("moderate", -10, 10), wide("wide", 0, 100000, 0), zero, grid(7, 1, 128, 0, true)}
 	case "atan2":
 		return []region{
 			{"wide", func(r *rand.Rand, p uint) []*big.Float {

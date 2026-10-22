@@ -19,10 +19,18 @@ type mag struct {
 	e int64
 }
 
-// up and down move a float64 one ulp towards +Inf or towards 0. Applied to a
-// result rounded to nearest, they give a bound in that direction.
-func up(x float64) float64   { return math.Nextafter(x, math.Inf(1)) }
-func down(x float64) float64 { return math.Nextafter(x, 0) }
+// up and down move a non-negative float64 at least one ulp towards +Inf or
+// towards 0 (at most two). Applied to a result rounded to nearest, they
+// give a bound in that direction. For a normal x, x·2^-52 is at least one
+// ulp of x, so x(1 ± 2^-52) rounds to nearest at least one ulp away (the
+// rounding cannot cross back past a representable neighbour); for zero
+// and subnormals, where that product rounds back to x, the smallest
+// subnormal 2^-1074 added or removed is the ulp, exactly. Two flops in
+// place of math.Nextafter, which the fixed-point bounds call on every
+// operation.
+func up(x float64) float64 { return x*(1+0x1p-52) + 0x1p-1074 }
+
+func down(x float64) float64 { return max(x*(1-0x1p-52)-0x1p-1074, 0) }
 
 // magNorm builds a normalised mag from m·2^e (m >= 0, finite) without
 // changing its value.
