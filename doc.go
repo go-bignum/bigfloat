@@ -25,7 +25,7 @@
 //
 // Functions: Sqrt, Cbrt, Root, Hypot; Exp, Expm1, Log, Log1p, Log2, Log10,
 // Pow; Sin, Cos, Tan, Asin, Acos, Atan, Atan2; Sinh, Cosh, Tanh, Asinh,
-// Acosh, Atanh. Constants: Pi, E, Ln2, Ln10, EulerGamma.
+// Acosh, Atanh. Constants: Pi, E, Ln2, Ln10, EulerGamma, Catalan.
 //
 // Correct rounding comes from rigorous enclosures (midpoint-radius balls,
 // fixed-point series with bounded errors) evaluated by Ziv's strategy, exact

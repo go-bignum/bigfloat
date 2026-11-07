@@ -46,7 +46,7 @@ var Binary = map[string]func(z, x, y *big.Float) *big.Float{
 
 // Constants lists the bigfloat constants by oracle name.
 var Constants = map[string]func(z *big.Float) *big.Float{
-	"pi": bigfloat.Pi, "e": bigfloat.E, "ln2": bigfloat.Ln2, "ln10": bigfloat.Ln10, "euler": bigfloat.EulerGamma,
+	"pi": bigfloat.Pi, "e": bigfloat.E, "ln2": bigfloat.Ln2, "ln10": bigfloat.Ln10, "euler": bigfloat.EulerGamma, "catalan": bigfloat.Catalan,
 }
 
 // Call evaluates the named bigfloat function into z (at z's precision and

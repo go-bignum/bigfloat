@@ -20,7 +20,7 @@ z.Acc()               // big.Below / big.Exact / big.Above: the side of the exac
 | exponentials and logarithms | `Exp`, `Expm1`, `Log`, `Log1p`, `Log2`, `Log10`, `Pow` |
 | trigonometric | `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2` |
 | hyperbolic | `Sinh`, `Cosh`, `Tanh`, `Asinh`, `Acosh`, `Atanh` |
-| constants | `Pi`, `E`, `Ln2`, `Ln10`, `EulerGamma` |
+| constants | `Pi`, `E`, `Ln2`, `Ln10`, `EulerGamma`, `Catalan` |
 | oracle harness | package `oracle`: mpmath driven from Go, correctly rounded reference values, golden fixtures; `oracle.Self` uses this package as the reference |
 
 ## The guarantee
@@ -63,6 +63,11 @@ Arb, Chudnovsky, Brent–McMillan).
   every precision from 2 to 300 and at 500, 1000, 2000). Each case is
   checked in all six modes, value, sign of zero and accuracy: **173 040
   results, all identical** to the certified roundings.
+- **Catalan's constant against MPFR itself**: `Catalan` is checked against
+  MPFR 4.2.2's `mpfr_const_catalan` (`go run ./cmd/mpfrcatalan`, through
+  julia 1.12.6) at every precision from 1 to 1000 and at 4096 and 10000
+  bits, in all six modes (nearest-away equals nearest-even: the command
+  refuses a case where a tie is possible): 1002 cases, **bit-identical**.
 - **Hostile points against mpmath** (`TestHostileMpmath`, when uv is
   installed): exact grid points and ulp-wide perturbations, table/series
   edges, huge and tiny exponents, at eleven precisions from 2 to 2100 bits.

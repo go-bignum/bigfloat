@@ -69,7 +69,7 @@ The Mathematica, MPFR and Arb tables are not counted.
 | `ln10` | `Log[10]` | `Ln10` | done | |
 | `euler` | `EulerGamma` | `EulerGamma` | done | |
 | `phi` | `GoldenRatio` | | missing | none (`(1+sqrt 5)/2`, correctly rounded via `Sqrt`) |
-| `catalan` | `Catalan` | | missing | none (series; see Brent-McMillan style or Zeta-based formula) |
+| `catalan` | `Catalan` | `Catalan` | done | golden from MPFR 4.2.2 `mpfr_const_catalan` (precisions 1–1000, 4096, 10000) |
 | `khinchin` | `Khinchin` | | missing | `zeta` derivative series; slow convergence tables |
 | `glaisher` | `Glaisher` | | missing | `zeta'(-1)` or the Kinkelin series |
 | `apery` | `Zeta[3]` | | missing | none (Zeta(3) fast series) |
@@ -498,7 +498,7 @@ not opened.
 | MPFR | `fma`, `fms`, `fmma`, `sum`, `dot` (exactly rounded) | | missing |
 | MPFR | `fmod`, `remainder`, `remquo`, `rint`, `round`, `trunc`, `ceil`, `floor`, `frac`, `modf`, `nextabove`, `nextbelow`, `nexttoward` | | missing |
 | MPFR | Exponent range `emin`/`emax`, `subnormalize`, exception flags (underflow, overflow, nan, inexact, erange) | big.Float exponent range fixed; overflow gives Inf | missing |
-| MPFR | `const_pi`, `const_log2`, `const_euler`, `const_catalan` | `Pi`, `Ln2`, `EulerGamma` | partial (no `Catalan`) |
+| MPFR | `const_pi`, `const_log2`, `const_euler`, `const_catalan` | `Pi`, `Ln2`, `EulerGamma`, `Catalan` | done |
 | MPFR | `mpfr_get_str`, `mpfr_set_str`, `printf` | `big.Float.Text`, `SetString` | done (math/big) |
 | MPFR | `mpfr_ubf` (unbounded floats) | | missing |
 | MPFR | `mpfr_mul_2si`, `mpfr_div_2si`, `get_d_2exp` | `SetMantExp` | done (math/big) |
