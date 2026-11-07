@@ -33,7 +33,7 @@ const MpmathScript = `import sys,json,time,mpmath as M
 from mpmath import mp,mpf
 sys.set_int_max_str_digits(0)
 r1=lambda f:(lambda x,*a:-f(-x,*a) if x<0 else f(x,*a))
-F=dict(sqrt=M.sqrt,cbrt=r1(M.cbrt),root=r1(lambda x,n:M.root(x,int(n))),hypot=M.hypot,exp=M.exp,expm1=M.expm1,log=M.log,log1p=M.log1p,log2=lambda x:M.log(x,2),log10=M.log10,pow=M.power,sin=M.sin,cos=M.cos,tan=M.tan,asin=M.asin,acos=M.acos,atan=M.atan,atan2=M.atan2,sinh=M.sinh,cosh=M.cosh,tanh=M.tanh,asinh=M.asinh,acosh=M.acosh,atanh=M.atanh,pi=lambda:+mp.pi,e=lambda:+mp.e,ln2=lambda:+mp.ln2,ln10=lambda:+mp.ln10,euler=lambda:+mp.euler)
+F=dict(sqrt=M.sqrt,cbrt=r1(M.cbrt),root=r1(lambda x,n:M.root(x,int(n))),hypot=M.hypot,exp=M.exp,expm1=M.expm1,log=M.log,log1p=M.log1p,log2=lambda x:M.log(x,2),log10=M.log10,pow=M.power,sin=M.sin,cos=M.cos,tan=M.tan,asin=M.asin,acos=M.acos,atan=M.atan,atan2=M.atan2,sinh=M.sinh,cosh=M.cosh,tanh=M.tanh,asinh=M.asinh,acosh=M.acosh,atanh=M.atanh,pi=lambda:+mp.pi,e=lambda:+mp.e,ln2=lambda:+mp.ln2,ln10=lambda:+mp.ln10,euler=lambda:+mp.euler,catalan=lambda:+mp.catalan)
 def T(g,A,n):
   b=1e9
   for _ in range(5):

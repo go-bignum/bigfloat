@@ -117,6 +117,7 @@ sticky bit to exact integer roots.
 | E | Σ 1/k! by binary splitting, tail below 1/N! |
 | Ln2 | 18 atanh(1/26) − 2 atanh(1/4801) + 8 atanh(1/8749), each by binary splitting |
 | Ln10 | 3 ln2 + 2 atanh(1/9) |
+| Catalan | G = π/8·log(2+√3) + 3/8·Σ (k!)²/((2k)!(2k+1)²) (Adamchik, formula 31; the series of MPFR 4.2.2 `const_catalan.c`), split in binary; term ratio below 1/4, so N terms leave a tail below 2^(1−2N) relative to the sum, which the ball carries |
 | EulerGamma | Brent–McMillan algorithm B1 (Math. Comp. 34, 1980; MCA §4.12): U/V − γ = K0(2n)/I0(2n), below π e^-4n, with tails of U and V bounded from the computed balls |
 
 Constants are cached at the highest precision asked so far and rounded down

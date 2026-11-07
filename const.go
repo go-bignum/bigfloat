@@ -219,6 +219,52 @@ func eulerBallCompute(wp uint) *ball {
 	return g.addRad(magPow2(-int64(wp) - 6))
 }
 
+// --- Catalan's constant --------------------------------------------------
+
+// catalanSeries is Σ_{k>=0} t_k with t_k = (k!)²/((2k)!·(2k+1)²), as a split
+// series with a = b = 1 and term ratio t_k/t_{k-1} = p/q = k(2k-1)/(2(2k+1)²)
+// (the P and Q of MPFR's S() in src/const_catalan.c).
+type catalanSeries struct{}
+
+func (catalanSeries) term(k int64) (a, b, p, q *big.Int) {
+	if k == 0 {
+		return big.NewInt(1), big.NewInt(1), big.NewInt(1), big.NewInt(1)
+	}
+	p = big.NewInt(2*k - 1)
+	p.Mul(p, big.NewInt(k))
+	q = big.NewInt(2*k + 1)
+	q.Mul(q, q)
+	q.Lsh(q, 1)
+	return big.NewInt(1), big.NewInt(1), p, q
+}
+
+// catalanBallCompute encloses G = π/8·log(2+√3) + 3/8·Σ_{k>=0} t_k, the
+// formula (31) of Adamchik's "33 representations for Catalan's constant"
+// that MPFR 4.2.2 uses (src/const_catalan.c, mpfr_const_catalan_internal).
+// Where MPFR takes N = (p-1)/2 terms and trusts MPFR_CAN_ROUND, the series
+// is bounded here: t_k/t_{k-1} = k(2k-1)/(2(2k+1)²) < 1/4 (as
+// 4k(2k-1) < 2(2k+1)²), hence t_k < 4^-k and, the sum being at least
+// t_0 = 1, the tail after N terms is below Σ_{k>=N} 4^-k = (4/3)·4^-N
+// < 2^(1-2N), relative to the sum. The sum is about 1.2, π·log(2+√3) about
+// 4.14 and G about 0.916: no cancellation, so 10 guard bits cover the few
+// balls' roundings.
+func catalanBallCompute(wp uint) *ball {
+	w := wp + 10
+	N := int64(w+3)/2 + 1 // 2N-1 >= w+2
+	s := bsBall(binarySplit(catalanSeries{}, 0, N), w, 2*N-1)
+	var x, y, k ball
+	k.setInt64(3)
+	x.sqrt(&k, w)
+	k.setInt64(2)
+	x.add(&x, &k, w)
+	logBallB(&y, &x, w)
+	x.mul(&y, piBall(w), w)
+	k.setInt64(3)
+	y.mul(s, &k, w)
+	x.add(&x, &y, w)
+	return x.mul2exp(&x, -3)
+}
+
 // logInt encloses log n for an integer n >= 1.
 func logInt(z *ball, n int64, wp uint) {
 	logBall(z, new(big.Float).SetInt64(n), wp)
@@ -284,6 +330,8 @@ var (
 	ln2Cache   = &constCache{compute: ln2BallCompute}
 	ln10Cache  = &constCache{compute: ln10BallCompute}
 	eulerCache = &constCache{compute: eulerBallCompute}
+
+	catalanCache = &constCache{compute: catalanBallCompute}
 )
 
 func piFx(w uint) *fx         { return piCache.fx(w) }
@@ -293,6 +341,8 @@ func ln2Ball(wp uint) *ball   { return ln2Cache.get(wp) }
 func ln10Ball(wp uint) *ball  { return ln10Cache.get(wp) }
 func eBall(wp uint) *ball     { return eCache.get(wp) }
 func eulerBall(wp uint) *ball { return eulerCache.get(wp) }
+
+func catalanBall(wp uint) *ball { return catalanCache.get(wp) }
 
 func constant(z *big.Float, f func(uint) *ball) *big.Float {
 	precOf(z, 64)
@@ -314,3 +364,8 @@ func Ln10(z *big.Float) *big.Float { return constant(z, ln10Ball) }
 
 // EulerGamma sets z to the Euler–Mascheroni constant γ, correctly rounded.
 func EulerGamma(z *big.Float) *big.Float { return constant(z, eulerBall) }
+
+// Catalan sets z to Catalan's constant G = Σ (-1)^k/(2k+1)², correctly
+// rounded: the same value, in every mode and at every precision, as MPFR's
+// mpfr_const_catalan (src/const_catalan.c, MPFR 4.2.2).
+func Catalan(z *big.Float) *big.Float { return constant(z, catalanBall) }

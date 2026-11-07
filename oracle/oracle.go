@@ -53,7 +53,7 @@ var Functions = map[string]int{
 	"exp": 1, "expm1": 1, "log": 1, "log1p": 1, "log2": 1, "log10": 1, "pow": 2,
 	"sin": 1, "cos": 1, "tan": 1, "asin": 1, "acos": 1, "atan": 1, "atan2": 2,
 	"sinh": 1, "cosh": 1, "tanh": 1, "asinh": 1, "acosh": 1, "atanh": 1,
-	"pi": 0, "e": 0, "ln2": 0, "ln10": 0, "euler": 0,
+	"pi": 0, "e": 0, "ln2": 0, "ln10": 0, "euler": 0, "catalan": 0,
 }
 
 // Modes lists big.Float's six rounding modes, in the order fixtures store
